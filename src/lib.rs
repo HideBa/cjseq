@@ -1702,4 +1702,79 @@ mod tests {
         assert_eq!(all_vertices[2], [0.2734, 0.3057]);
         assert_eq!(all_vertices[3], [0.2269, 0.2883]);
     }
+
+    #[test]
+    fn test_material_validation() {
+        let valid_material = MaterialObject {
+            name: "test".to_string(),
+            ambient_intensity: Some(0.5),
+            diffuse_color: Some([0.1, 0.2, 0.3]),
+            emissive_color: Some([0.4, 0.5, 0.6]),
+            specular_color: Some([0.7, 0.8, 0.9]),
+            shininess: Some(0.4),
+            transparency: Some(0.3),
+            is_smooth: Some(true),
+        };
+        assert!(valid_material.validate().is_ok());
+
+        let invalid_ambient = MaterialObject {
+            ambient_intensity: Some(1.5),
+            ..valid_material.clone()
+        };
+        assert!(invalid_ambient.validate().is_err());
+
+        let invalid_diffuse = MaterialObject {
+            diffuse_color: Some([-0.1, 0.5, 1.2]),
+            ..valid_material.clone()
+        };
+        assert!(invalid_diffuse.validate().is_err());
+
+        let invalid_emissive = MaterialObject {
+            emissive_color: Some([0.5, 1.5, 0.5]),
+            ..valid_material.clone()
+        };
+        assert!(invalid_emissive.validate().is_err());
+
+        let invalid_specular = MaterialObject {
+            specular_color: Some([0.5, 0.5, 1.5]),
+            ..valid_material.clone()
+        };
+        assert!(invalid_specular.validate().is_err());
+
+        let invalid_shininess = MaterialObject {
+            shininess: Some(2.0),
+            ..valid_material.clone()
+        };
+        assert!(invalid_shininess.validate().is_err());
+
+        let invalid_transparency = MaterialObject {
+            transparency: Some(-0.5),
+            ..valid_material.clone()
+        };
+        assert!(invalid_transparency.validate().is_err());
+    }
+
+    #[test]
+    fn test_texture_validation() {
+        let valid_texture = TextureObject {
+            texture_type: TextureType::Jpg,
+            image: "test.jpg".to_string(),
+            wrap_mode: Some(WrapMode::Wrap),
+            texture_type_semantic: Some(TextureTypeSemantic::Specific),
+            border_color: Some([0.1, 0.2, 0.3, 0.4]),
+        };
+        assert!(valid_texture.validate().is_ok());
+
+        let invalid_border_color = TextureObject {
+            border_color: Some([-0.1, 0.5, 1.2, 0.5]),
+            ..valid_texture.clone()
+        };
+        assert!(invalid_border_color.validate().is_err());
+
+        let invalid_border_color_2 = TextureObject {
+            border_color: Some([0.5, 0.5, 0.5, 1.5]),
+            ..valid_texture.clone()
+        };
+        assert!(invalid_border_color_2.validate().is_err());
+    }
 }
