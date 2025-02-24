@@ -1151,15 +1151,46 @@ pub struct MaterialObject {
     pub is_smooth: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TextureType {
+    Png,
+    Jpg,
+}
+
+impl Default for TextureType {
+    fn default() -> Self {
+        TextureType::Jpg
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WrapMode {
+    None,
+    Wrap,
+    Mirror,
+    Clamp,
+    Border,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureTypeSemantic {
+    Unknown,
+    Specific,
+    Typical,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct TextureObject {
     #[serde(rename = "type")]
-    pub texture_type: String, // "PNG" or "JPG"
+    pub texture_type: TextureType,
     pub image: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wrap_mode: Option<String>, // "none", "wrap", "mirror", "clamp", "border"
+    pub wrap_mode: Option<WrapMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub texture_type_semantic: Option<String>, // "unknown", "specific", "typical"
+    pub texture_type_semantic: Option<TextureTypeSemantic>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<[f64; 4]>,
 }
@@ -1431,7 +1462,7 @@ mod tests {
 
         // Test textures
         assert!(textures.len() == 5);
-        assert!(textures[0].texture_type == "JPG");
+        assert!(textures[0].texture_type == TextureType::Jpg);
         assert!(textures[0].image == "appearances/0320_2_12.jpg");
 
         // Test vertices-texture
@@ -1497,7 +1528,7 @@ mod tests {
 
         // Test adding first texture
         let tex1 = TextureObject {
-            texture_type: "JPG".to_string(),
+            texture_type: TextureType::Jpg,
             image: "appearances/0320_2_12.jpg".to_string(),
             wrap_mode: None,
             texture_type_semantic: None,
@@ -1512,7 +1543,7 @@ mod tests {
 
         // Test adding different texture
         let tex2 = TextureObject {
-            texture_type: "JPG".to_string(),
+            texture_type: TextureType::Jpg,
             image: "appearances/0320_2_13.jpg".to_string(),
             wrap_mode: None,
             texture_type_semantic: None,
