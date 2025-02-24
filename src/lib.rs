@@ -1140,6 +1140,10 @@ pub struct GeometryTemplates {
     pub vertices_templates: Value,
 }
 
+pub trait Validate {
+    fn validate(&self) -> Result<(), String>;
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MaterialObject {
     pub name: String,
@@ -1157,6 +1161,44 @@ pub struct MaterialObject {
     pub transparency: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "isSmooth")]
     pub is_smooth: Option<bool>,
+}
+
+impl Validate for MaterialObject {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(intensity) = self.ambient_intensity {
+            if !(0.0..=1.0).contains(&intensity) {
+                return Err("ambient_intensity must be between 0.0 and 1.0".to_string());
+            }
+        }
+
+        for (name, color) in [
+            ("diffuse_color", &self.diffuse_color),
+            ("emissive_color", &self.emissive_color),
+            ("specular_color", &self.specular_color),
+        ] {
+            if let Some(c) = color {
+                for &v in c.iter() {
+                    if !(0.0..=1.0).contains(&v) {
+                        return Err(format!("{} values must be between 0.0 and 1.0", name));
+                    }
+                }
+            }
+        }
+
+        if let Some(shininess) = self.shininess {
+            if !(0.0..=1.0).contains(&shininess) {
+                return Err("shininess must be between 0.0 and 1.0".to_string());
+            }
+        }
+
+        if let Some(transparency) = self.transparency {
+            if !(0.0..=1.0).contains(&transparency) {
+                return Err("transparency must be between 0.0 and 1.0".to_string());
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1201,6 +1243,19 @@ pub struct TextureObject {
     pub texture_type_semantic: Option<TextureTypeSemantic>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<[f64; 4]>,
+}
+
+impl Validate for TextureObject {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(colors) = &self.border_color {
+            for (i, &c) in colors.iter().enumerate() {
+                if !(0.0..=1.0).contains(&c) {
+                    return Err(format!("border_color[{}] must be between 0.0 and 1.0", i));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub type MaterialSurfaceValues = Vec<Option<usize>>;
