@@ -1195,12 +1195,54 @@ pub struct TextureObject {
     pub border_color: Option<[f64; 4]>,
 }
 
+pub type MaterialSurfaceValues = Vec<Option<usize>>;
+pub type MaterialSolidValues = Vec<Vec<Option<usize>>>;
+pub type MaterialMultiSolidValues = Vec<Vec<Vec<Option<usize>>>>;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum MaterialValues {
+    Surface(MaterialSurfaceValues),
+    Solid(MaterialSolidValues),
+    MultiSolid(MaterialMultiSolidValues),
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MaterialReference {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<Value>, // Nested array structure depends on geometry type
+    pub values: Option<MaterialValues>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<usize>, // Single material index
+    pub value: Option<usize>,
+}
+
+impl MaterialReference {
+    pub fn new_surface(values: Option<MaterialSurfaceValues>) -> Self {
+        Self {
+            values: values.map(MaterialValues::Surface),
+            value: None,
+        }
+    }
+
+    pub fn new_solid(values: Option<MaterialSolidValues>) -> Self {
+        Self {
+            values: values.map(MaterialValues::Solid),
+            value: None,
+        }
+    }
+
+    pub fn new_multi_solid(values: Option<MaterialMultiSolidValues>) -> Self {
+        Self {
+            values: values.map(MaterialValues::MultiSolid),
+            value: None,
+        }
+    }
+
+    pub fn new_single(value: usize) -> Self {
+        Self {
+            values: None,
+            value: Some(value),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
