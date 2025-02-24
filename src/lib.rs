@@ -1365,6 +1365,11 @@ impl Appearance {
     }
 
     fn add_material(&mut self, value: MaterialObject) -> usize {
+        // Validate material before adding
+        if let Err(e) = value.validate() {
+            panic!("Invalid material: {}", e);
+        }
+
         match &mut self.materials {
             Some(x) => match x.iter().position(|e| e.name == value.name) {
                 Some(y) => y,
@@ -1383,6 +1388,11 @@ impl Appearance {
     }
 
     fn add_texture(&mut self, value: TextureObject) -> usize {
+        // Validate texture before adding
+        if let Err(e) = value.validate() {
+            panic!("Invalid texture: {}", e);
+        }
+
         match &mut self.textures {
             Some(x) => match x.iter().position(|e| e.image == value.image) {
                 Some(y) => y,
