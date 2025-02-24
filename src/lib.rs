@@ -903,78 +903,79 @@ impl Geometry {
                 for (_key, tex) in &mut *x {
                     match self.thetype {
                         GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                            let a: Vec<Vec<Vec<Option<usize>>>> =
-                                serde_json::from_value(tex.values.take().into()).unwrap();
-                            let mut a2 = a.clone();
-                            for (i, x) in a.iter().enumerate() {
-                                for (j, y) in x.iter().enumerate() {
-                                    for (k, z) in y.iter().enumerate() {
-                                        if z.is_some() {
-                                            let thevalue: usize = z.unwrap();
-                                            if k == 0 {
-                                                let y2 = t_oldnew.get(&thevalue);
-                                                if y2.is_none() {
-                                                    let l = t_oldnew.len();
-                                                    t_oldnew.insert(thevalue, l);
-                                                    a2[i][j][k] = Some(l);
+                            if let TextureValues::Surface(values) =
+                                std::mem::replace(&mut tex.values, TextureValues::Surface(vec![]))
+                            {
+                                let mut new_values = values.clone();
+                                for (i, surface) in values.iter().enumerate() {
+                                    for (j, ring) in surface.iter().enumerate() {
+                                        for (k, value) in ring.iter().enumerate() {
+                                            if let Some(old_idx) = value {
+                                                let new_idx = if k == 0 {
+                                                    let y2 = t_oldnew.get(old_idx);
+                                                    if y2.is_none() {
+                                                        let l = t_oldnew.len();
+                                                        t_oldnew.insert(*old_idx, l);
+                                                        l
+                                                    } else {
+                                                        *y2.unwrap()
+                                                    }
                                                 } else {
-                                                    let y2 = y2.unwrap();
-                                                    a2[i][j][k] = Some(*y2);
-                                                }
-                                            } else {
-                                                let y2 = t_v_oldnew.get(&thevalue);
-                                                if y2.is_none() {
-                                                    let l = t_v_oldnew.len();
-                                                    t_v_oldnew.insert(thevalue, l + offset);
-                                                    a2[i][j][k] = Some(l);
-                                                } else {
-                                                    let y2 = y2.unwrap();
-                                                    a2[i][j][k] = Some(*y2);
-                                                }
+                                                    let y2 = t_v_oldnew.get(old_idx);
+                                                    if y2.is_none() {
+                                                        let l = t_v_oldnew.len();
+                                                        t_v_oldnew.insert(*old_idx, l + offset);
+                                                        l
+                                                    } else {
+                                                        *y2.unwrap()
+                                                    }
+                                                };
+                                                new_values[i][j][k] = Some(new_idx);
                                             }
                                         }
                                     }
                                 }
+                                tex.values = TextureValues::Surface(new_values);
                             }
-                            tex.values = serde_json::to_value(&a2).unwrap();
                         }
                         GeometryType::Solid => {
-                            let a: Vec<Vec<Vec<Vec<Option<usize>>>>> =
-                                serde_json::from_value(tex.values.take().into()).unwrap();
-                            let mut a2 = a.clone();
-                            for (i, x) in a.iter().enumerate() {
-                                for (j, y) in x.iter().enumerate() {
-                                    for (k, z) in y.iter().enumerate() {
-                                        for (l, zz) in z.iter().enumerate() {
-                                            if zz.is_some() {
-                                                let thevalue: usize = zz.unwrap();
-                                                if l == 0 {
-                                                    let y2 = t_oldnew.get(&thevalue);
-                                                    if y2.is_none() {
-                                                        let l2 = t_oldnew.len();
-                                                        t_oldnew.insert(thevalue, l2);
-                                                        a2[i][j][k][l] = Some(l2);
+                            if let TextureValues::Solid(values) =
+                                std::mem::replace(&mut tex.values, TextureValues::Solid(vec![]))
+                            {
+                                let mut new_values = values.clone();
+                                for (i, shell) in values.iter().enumerate() {
+                                    for (j, surface) in shell.iter().enumerate() {
+                                        for (k, ring) in surface.iter().enumerate() {
+                                            for (l, value) in ring.iter().enumerate() {
+                                                if let Some(old_idx) = value {
+                                                    let new_idx = if l == 0 {
+                                                        let y2 = t_oldnew.get(old_idx);
+                                                        if y2.is_none() {
+                                                            let l2 = t_oldnew.len();
+                                                            t_oldnew.insert(*old_idx, l2);
+                                                            l2
+                                                        } else {
+                                                            *y2.unwrap()
+                                                        }
                                                     } else {
-                                                        let y2 = y2.unwrap();
-                                                        a2[i][j][k][l] = Some(*y2);
-                                                    }
-                                                } else {
-                                                    let y2 = t_v_oldnew.get(&thevalue);
-                                                    if y2.is_none() {
-                                                        let l2 = t_v_oldnew.len();
-                                                        t_v_oldnew.insert(thevalue, l2 + offset);
-                                                        a2[i][j][k][l] = Some(l2);
-                                                    } else {
-                                                        let y2 = y2.unwrap();
-                                                        a2[i][j][k][l] = Some(*y2);
-                                                    }
+                                                        let y2 = t_v_oldnew.get(old_idx);
+                                                        if y2.is_none() {
+                                                            let l2 = t_v_oldnew.len();
+                                                            t_v_oldnew
+                                                                .insert(*old_idx, l2 + offset);
+                                                            l2
+                                                        } else {
+                                                            *y2.unwrap()
+                                                        }
+                                                    };
+                                                    new_values[i][j][k][l] = Some(new_idx);
                                                 }
                                             }
                                         }
                                     }
                                 }
+                                tex.values = TextureValues::Solid(new_values);
                             }
-                            tex.values = serde_json::to_value(&a2).unwrap();
                         }
                         _ => todo!(),
                     }
