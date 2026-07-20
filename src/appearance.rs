@@ -1,10 +1,23 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// One shell's worth of material indices, one per surface. `None` — a whole
+/// shell with no material — is `null` in JSON, which
+/// `geomprimitives.schema.json` permits at every level of `material.values`
+/// (`"type": ["array", "null"]`).
+pub type MaterialShell = Vec<Option<usize>>;
+/// One solid's worth of material indices, one per surface, per shell.
+pub type MaterialSolid = Vec<Option<MaterialShell>>;
+
 /// The `values` array of a [`MaterialReference`]: one index into the
 /// document's `materials` palette per *surface*, so it is nested exactly two
 /// levels less deeply than that geometry's `boundaries` (CityJSON 2.0,
-/// section 6.1). A surface with no material is `null`, never `[]`.
+/// section 6.1).
+///
+/// `null` is permitted at *every* level, not only at the leaf: a surface, a
+/// whole shell, or a whole solid may have no material. Every one of those
+/// `None`s must serialize back as `null` and never as `[]` — that is
+/// finding #7, and it is pinned by test at each level.
 ///
 /// The variants are ordered shallowest-first; serde tries them in declaration
 /// order, so a value only reaches a deeper variant when the shallower ones
@@ -15,20 +28,28 @@ pub enum MaterialValues {
     /// `MultiSurface`, `CompositeSurface`: one index per surface.
     Surfaces(Vec<Option<usize>>),
     /// `Solid`: one index per surface, per shell.
-    Shells(Vec<Vec<Option<usize>>>),
+    Shells(Vec<Option<MaterialShell>>),
     /// `MultiSolid`, `CompositeSolid`: one index per surface, per shell, per
     /// solid.
-    Solids(Vec<Vec<Vec<Option<usize>>>>),
+    Solids(Vec<Option<MaterialSolid>>),
 }
 
 impl MaterialValues {
     /// Every material index, in document order, whatever the depth. The depth
-    /// is known from the variant, so no runtime inspection is needed.
+    /// is known from the variant, so no runtime inspection is needed; the
+    /// `flatten()`s skip `None` sub-arrays as well as `null` leaves.
     pub(crate) fn indices_mut(&mut self) -> Box<dyn Iterator<Item = &mut usize> + '_> {
         match self {
             MaterialValues::Surfaces(v) => Box::new(v.iter_mut().flatten()),
-            MaterialValues::Shells(v) => Box::new(v.iter_mut().flatten().flatten()),
-            MaterialValues::Solids(v) => Box::new(v.iter_mut().flatten().flatten().flatten()),
+            MaterialValues::Shells(v) => Box::new(v.iter_mut().flatten().flatten().flatten()),
+            MaterialValues::Solids(v) => Box::new(
+                v.iter_mut()
+                    .flatten()
+                    .flatten()
+                    .flatten()
+                    .flatten()
+                    .flatten(),
+            ),
         }
     }
 }
@@ -49,7 +70,14 @@ pub type TexturedShell = Vec<TexturedSurface>;
 ///
 /// Only surface-bearing geometries can carry a texture, so the ladder starts
 /// at `MultiSurface` depth: a `MultiPoint` or `MultiLineString` has no rings
-/// to texture.
+/// to texture, and both declare `additionalProperties: false` without a
+/// `texture` member.
+///
+/// Unlike [`MaterialValues`], the intermediate levels are *not* nullable.
+/// `geomprimitives.schema.json` types `texture.values` and every one of its
+/// intermediate `items` as a plain `"array"` — only the innermost items are
+/// `["integer", "null"]` — so `[null, [[0, 10, 11]]]` is not valid CityJSON
+/// and is rejected here.
 ///
 /// The variants are ordered shallowest-first, as in [`MaterialValues`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -88,9 +116,15 @@ pub struct MaterialReference {
 }
 
 /// One theme's texture assignment for a geometry.
+///
+/// `values` is optional: the per-theme texture object in
+/// `geomprimitives.schema.json` carries no `required` keyword at all (in
+/// contrast to `material`, which requires exactly one of `value`/`values`), so
+/// a bare `{"theme": {}}` is valid CityJSON.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TextureReference {
-    pub values: TextureValues,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<TextureValues>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -259,6 +293,128 @@ mod tests {
         assert!(serde_json::from_value::<MaterialValues>(serde_json::json!([[[[0]]]])).is_err());
         //-- and neither is a bare scalar
         assert!(serde_json::from_value::<MaterialValues>(serde_json::json!(0)).is_err());
+        //-- the untyped Option<Value> this replaced accepted six levels
+        assert!(
+            serde_json::from_value::<MaterialValues>(serde_json::json!([[[[[[0]]]]]])).is_err()
+        );
+    }
+
+    /// `geomprimitives.schema.json` types `material.values` and every one of
+    /// its intermediate `items` as `["array", "null"]`, so a whole null shell
+    /// or a whole null solid is valid CityJSON. Each of those `None`s must
+    /// come back as `null` — never as `[]`, which is finding #7, the bug this
+    /// whole rewrite exists to prevent.
+    #[test]
+    fn a_null_material_sub_array_round_trips_as_null_at_every_level() {
+        for input in [
+            //-- leaf: a surface with no material
+            serde_json::json!([0, null, 2]),
+            //-- intermediate: a whole shell with no material
+            serde_json::json!([[0, 1], null]),
+            serde_json::json!([null, [0, 1]]),
+            //-- intermediate: a whole solid, and a shell inside a solid
+            serde_json::json!([[[0, 1]], null]),
+            serde_json::json!([[[0, 1], null], null]),
+            //-- nothing but nulls, at each depth
+            serde_json::json!([null, null]),
+            serde_json::json!([[null], null]),
+        ] {
+            let v: MaterialValues = serde_json::from_value(input.clone())
+                .unwrap_or_else(|e| panic!("{input} is schema-valid CityJSON: {e}"));
+            assert_eq!(
+                serde_json::to_value(&v).unwrap(),
+                input,
+                "{input} must round-trip with its nulls intact, never as []"
+            );
+        }
+    }
+
+    /// The variant ladder must still resolve by depth now that the
+    /// intermediate levels are `Option`.
+    #[test]
+    fn null_sub_arrays_do_not_disturb_the_material_ladder() {
+        let parse = |v: serde_json::Value| -> MaterialValues { serde_json::from_value(v).unwrap() };
+
+        assert!(matches!(
+            parse(serde_json::json!([null, 1])),
+            MaterialValues::Surfaces(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[0, 1], null])),
+            MaterialValues::Shells(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[[0, 1]], null])),
+            MaterialValues::Solids(_)
+        ));
+
+        //-- the empty-shape edges: each is ambiguous and must settle on the
+        //-- shallowest variant that can hold it, and stay byte-identical
+        for (input, is_surfaces) in [
+            (serde_json::json!([]), true),
+            (serde_json::json!([[]]), false),
+            (serde_json::json!([[[]]]), false),
+        ] {
+            let v = parse(input.clone());
+            assert_eq!(serde_json::to_value(&v).unwrap(), input, "{input}");
+            assert_eq!(
+                matches!(v, MaterialValues::Surfaces(_)),
+                is_surfaces,
+                "{input} landed in {v:?}"
+            );
+        }
+        assert!(matches!(
+            parse(serde_json::json!([[]])),
+            MaterialValues::Shells(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[[]]])),
+            MaterialValues::Solids(_)
+        ));
+    }
+
+    /// The texture ladder is deliberately *not* null-tolerant at its
+    /// intermediate levels: `geomprimitives.schema.json` types
+    /// `texture.values` and each intermediate `items` as a plain `"array"`,
+    /// with only the innermost items `["integer", "null"]`. An untextured ring
+    /// is spelled `[null]`, not `null`.
+    #[test]
+    fn texture_nulls_are_leaf_only() {
+        //-- what the schema allows: a null texture index inside a ring
+        let t: TextureValues = serde_json::from_value(serde_json::json!([[[null]]])).unwrap();
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!([[[null]]])
+        );
+
+        //-- what it does not: a null in place of a surface, ring, or shell
+        for bad in [
+            serde_json::json!([null, [[0, 10, 11]]]),
+            serde_json::json!([[null]]),
+            serde_json::json!([[[[0, 1]]], null]),
+        ] {
+            assert!(
+                serde_json::from_value::<TextureValues>(bad.clone()).is_err(),
+                "{bad} is not valid CityJSON and must be rejected"
+            );
+        }
+    }
+
+    /// The per-theme texture object has no `required` keyword in the schema,
+    /// so both of these are valid CityJSON and must parse.
+    #[test]
+    fn a_texture_reference_may_carry_no_values() {
+        let absent: TextureReference = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(absent.values, None);
+        //-- and an absent `values` must not reappear as `null` on the way out
+        assert_eq!(
+            serde_json::to_value(&absent).unwrap(),
+            serde_json::json!({})
+        );
+
+        let null: TextureReference =
+            serde_json::from_value(serde_json::json!({"values": null})).unwrap();
+        assert_eq!(null.values, None);
     }
 
     /// Texture values are nested exactly as deeply as the boundaries of the

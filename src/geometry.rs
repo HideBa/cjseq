@@ -138,14 +138,17 @@ impl Geometry {
     /// which says neither which geometry was at fault nor what depth it
     /// wanted.
     pub fn from_json_value(v: Value) -> Result<Geometry> {
-        let err = match serde_json::from_value::<Geometry>(v.clone()) {
+        //-- `&Value` is itself a Deserializer, so the happy path borrows `v`
+        //-- instead of deep-copying every boundary just to keep `v` alive for
+        //-- the error branch below.
+        let err = match Geometry::deserialize(&v) {
             Ok(g) => return Ok(g),
             Err(e) => e,
         };
         //-- can the failure be pinned on the depth of `boundaries`?
         let thetype = v
             .get("type")
-            .and_then(|t| serde_json::from_value::<GeometryType>(t.clone()).ok());
+            .and_then(|t| GeometryType::deserialize(t).ok());
         if let (Some(thetype), Some(boundaries)) = (thetype, v.get("boundaries")) {
             let expected = thetype.boundary_depth();
             let found = nesting_depth(boundaries);
@@ -320,7 +323,11 @@ impl Geometry {
             }
         };
         for tex in textures.values_mut() {
-            for ring in tex.values.rings_mut() {
+            //-- a theme may legally carry no `values` at all
+            let Some(values) = tex.values.as_mut() else {
+                continue;
+            };
+            for ring in values.rings_mut() {
                 for (k, z) in ring.iter_mut().enumerate() {
                     if let Some(thevalue) = *z {
                         *z = Some(remap(k == 0, thevalue));

@@ -22,9 +22,21 @@ pub struct SemanticsSurface {
     pub other: HashMap<String, Value>,
 }
 
+/// One shell's worth of semantic-surface indices, one per surface. `None` — a
+/// whole shell with no semantics — is `null` in JSON, which
+/// `geomprimitives.schema.json` permits at every level of `semantics.values`
+/// (`"type": ["array", "null"]`), exactly as it does for `material.values`.
+pub type SemanticsShell = Vec<Option<usize>>;
+/// One solid's worth of semantic-surface indices, per surface, per shell.
+pub type SemanticsSolid = Vec<Option<SemanticsShell>>;
+
 /// The `values` array of a [`Semantics`] object: one index into `surfaces` per
 /// *surface* of the geometry, so it is nested exactly one level less deeply
 /// than that geometry's `boundaries`.
+///
+/// As with [`crate::MaterialValues`], `null` is permitted at every level, not
+/// only at the leaf, and every `None` must serialize back as `null` rather
+/// than `[]` (finding #7).
 ///
 /// The variants are ordered shallowest-first; serde tries them in declaration
 /// order, so a value only reaches a deeper variant when the shallower ones
@@ -35,17 +47,23 @@ pub enum SemanticsValues {
     /// `MultiSurface`, `CompositeSurface`: one index per surface.
     Surfaces(Vec<Option<usize>>),
     /// `Solid`: one index per surface, per shell.
-    Shells(Vec<Vec<Option<usize>>>),
+    Shells(Vec<Option<SemanticsShell>>),
     /// `MultiSolid`, `CompositeSolid`: one index per surface, per shell, per
     /// solid.
-    Solids(Vec<Vec<Vec<Option<usize>>>>),
+    Solids(Vec<Option<SemanticsSolid>>),
 }
 
 /// The `semantics` member of a geometry.
+///
+/// `values` is a *required* member whose value may be `null`
+/// (`"type": ["array", "null"]`, and `"required": ["surfaces", "values"]`), so
+/// it is an `Option` that is serialized even when `None` — writing it out as
+/// `null` rather than dropping the member, which would produce a document the
+/// schema rejects.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Semantics {
     pub surfaces: Vec<SemanticsSurface>,
-    pub values: SemanticsValues,
+    pub values: Option<SemanticsValues>,
 }
 
 #[cfg(test)]
@@ -126,5 +144,86 @@ mod tests {
 
         //-- a shape deeper than the ladder is not silently accepted
         assert!(serde_json::from_value::<SemanticsValues>(serde_json::json!([[[[0]]]])).is_err());
+    }
+
+    /// `geomprimitives.schema.json` types `semantics.values` and every one of
+    /// its intermediate `items` as `["array", "null"]`, exactly as it does for
+    /// `material.values` — so a whole null shell is valid CityJSON here too,
+    /// and each `None` must come back as `null`, never as `[]` (finding #7).
+    #[test]
+    fn a_null_semantics_sub_array_round_trips_as_null_at_every_level() {
+        for input in [
+            serde_json::json!([0, null, 2]),
+            serde_json::json!([[0, 1], null]),
+            serde_json::json!([null, [0, 1]]),
+            serde_json::json!([[[0, 1]], null]),
+            serde_json::json!([[[0, 1], null], null]),
+            serde_json::json!([null, null]),
+            serde_json::json!([[null], null]),
+        ] {
+            let v: SemanticsValues = serde_json::from_value(input.clone())
+                .unwrap_or_else(|e| panic!("{input} is schema-valid CityJSON: {e}"));
+            assert_eq!(
+                serde_json::to_value(&v).unwrap(),
+                input,
+                "{input} must round-trip with its nulls intact, never as []"
+            );
+        }
+    }
+
+    /// `values` is required by the schema but may be `null`. It must parse,
+    /// and it must be written back out as `null` — dropping the member
+    /// entirely would violate `"required": ["surfaces", "values"]`.
+    #[test]
+    fn a_null_semantics_values_member_round_trips() {
+        let input = serde_json::json!({
+            "surfaces": [{"type": "RoofSurface"}], "values": null
+        });
+        let s: Semantics =
+            serde_json::from_value(input.clone()).expect("`values: null` is schema-valid CityJSON");
+        assert_eq!(s.values, None);
+        assert_eq!(serde_json::to_value(&s).unwrap(), input);
+    }
+
+    /// The ladder must still resolve by depth now that the intermediate levels
+    /// are `Option`, including the ambiguous empty shapes.
+    #[test]
+    fn null_sub_arrays_do_not_disturb_the_semantics_ladder() {
+        let parse =
+            |v: serde_json::Value| -> SemanticsValues { serde_json::from_value(v).unwrap() };
+
+        assert!(matches!(
+            parse(serde_json::json!([null, 1])),
+            SemanticsValues::Surfaces(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[0, 1], null])),
+            SemanticsValues::Shells(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[[0, 1]], null])),
+            SemanticsValues::Solids(_)
+        ));
+
+        for input in [
+            serde_json::json!([]),
+            serde_json::json!([[]]),
+            serde_json::json!([[[]]]),
+        ] {
+            let v = parse(input.clone());
+            assert_eq!(serde_json::to_value(&v).unwrap(), input, "{input}");
+        }
+        assert!(matches!(
+            parse(serde_json::json!([])),
+            SemanticsValues::Surfaces(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[]])),
+            SemanticsValues::Shells(_)
+        ));
+        assert!(matches!(
+            parse(serde_json::json!([[[]]])),
+            SemanticsValues::Solids(_)
+        ));
     }
 }
