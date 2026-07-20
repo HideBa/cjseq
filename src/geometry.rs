@@ -361,6 +361,12 @@ mod tests {
             .unwrap_or_else(|e| panic!("{name} must accept its own depth: {e}"));
             assert_eq!(g.geometry_type(), thetype);
             assert_eq!(g.lod(), Some("1"));
+            //-- and it must serialize back to exactly the boundaries it was given
+            assert_eq!(
+                serde_json::to_value(&g).unwrap()["boundaries"],
+                boundaries,
+                "{name} must round-trip its boundaries"
+            );
 
             //-- one level too deep must be rejected
             let too_deep = serde_json::json!([boundaries]);
@@ -370,6 +376,16 @@ mod tests {
                 }))
                 .is_err(),
                 "{name} must reject boundaries one level too deep"
+            );
+
+            //-- and one level too shallow must be rejected too
+            let too_shallow = boundaries[0].clone();
+            assert!(
+                parse(serde_json::json!({
+                    "type": name, "lod": "1", "boundaries": too_shallow
+                }))
+                .is_err(),
+                "{name} must reject boundaries one level too shallow"
             );
         }
     }
@@ -421,6 +437,110 @@ mod tests {
             serde_json::json!([[[0, 1, 0]], [[1, 2, 2]]])
         );
         assert_eq!(map.len(), 3);
+    }
+
+    /// The same first-encounter renumbering, but at the deepest traversal the
+    /// enum has, so the flattening order of the 5-level variants is pinned too.
+    /// Expected values produced by the pre-rewrite implementation at a97bc2d.
+    #[test]
+    fn update_boundaries_compacts_indices_at_max_depth() {
+        let mut g: Geometry = serde_json::from_value(serde_json::json!({
+            "type": "CompositeSolid", "lod": "2",
+            "boundaries": [[[[[7, 9, 7]]]], [[[[9, 4, 4]]]]]
+        }))
+        .unwrap();
+        let mut map: HashMap<usize, usize> = HashMap::new();
+        g.update_geometry_boundaries(&mut map);
+        assert_eq!(
+            serde_json::to_value(&g).unwrap()["boundaries"],
+            serde_json::json!([[[[[0, 1, 0]]]], [[[[1, 2, 2]]]]])
+        );
+        let mut entries: Vec<(usize, usize)> = map.into_iter().collect();
+        entries.sort();
+        assert_eq!(entries, vec![(4, 2), (7, 0), (9, 1)]);
+    }
+
+    /// `update_texture` renumbers the first entry of each innermost array
+    /// against the texture map and the rest against the texture-vertex map.
+    ///
+    /// Every expected value below was produced by running the pre-rewrite
+    /// implementation (commit a97bc2d) on this exact input; the test exists to
+    /// prove the rewrite is behaviour-preserving. Note in particular that the
+    /// texture-vertex numbering is asymmetric: the *first* occurrence of a
+    /// vertex is written as `l` while later occurrences are written as the
+    /// stored `l + offset` (see 20 -> 0 then 20 -> 100 below). That is upstream
+    /// behaviour, quirk included, and it is pinned here deliberately.
+    #[test]
+    fn update_texture_renumbers_textures_and_texture_vertices() {
+        let mut g: Geometry = serde_json::from_value(serde_json::json!({
+            "type": "MultiSurface", "lod": "2",
+            "boundaries": [[[0, 1, 2, 3]], [[4, 5, 6, 7]], [[8, 9, 10, 11]]],
+            "texture": {"winter": {"values": [
+                [[5, 20, 21, 22, 20]],
+                [[5, 22, 21, 30, 22]],
+                [[null]]
+            ]}}
+        }))
+        .unwrap();
+        let mut t_oldnew: HashMap<usize, usize> = HashMap::new();
+        let mut t_v_oldnew: HashMap<usize, usize> = HashMap::new();
+        g.update_texture(&mut t_oldnew, &mut t_v_oldnew, 100);
+
+        let values = g.common().unwrap().texture.as_ref().unwrap()["winter"]
+            .values
+            .clone()
+            .unwrap();
+        assert_eq!(
+            values,
+            serde_json::json!([
+                [[0, 0, 1, 2, 100]],
+                [[0, 102, 101, 3, 102]],
+                [[null]]
+            ]),
+            "texture values must renumber exactly as the old implementation did"
+        );
+
+        let mut t: Vec<(usize, usize)> = t_oldnew.into_iter().collect();
+        t.sort();
+        assert_eq!(t, vec![(5, 0)], "the repeated texture index 5 maps once");
+
+        let mut tv: Vec<(usize, usize)> = t_v_oldnew.into_iter().collect();
+        tv.sort();
+        assert_eq!(
+            tv,
+            vec![(20, 100), (21, 101), (22, 102), (30, 103)],
+            "texture vertices are stored offset by `offset`"
+        );
+    }
+
+    /// `update_material` renumbers `material.values` at the depth the geometry
+    /// type implies, and `null` holes (surfaces with no material) must survive
+    /// untouched. Expected values produced by the pre-rewrite implementation at
+    /// a97bc2d on this exact input.
+    #[test]
+    fn update_material_preserves_null_holes() {
+        let mut g: Geometry = serde_json::from_value(serde_json::json!({
+            "type": "Solid", "lod": "2",
+            "boundaries": [[[[0, 1, 2, 3]], [[4, 5, 6, 7]], [[8, 9, 10, 11]]]],
+            "material": {"irradiation": {"values": [[0, null, 2], [2, null, 0]]}}
+        }))
+        .unwrap();
+        let mut m_oldnew: HashMap<usize, usize> = HashMap::new();
+        g.update_material(&mut m_oldnew);
+
+        let values = g.common().unwrap().material.as_ref().unwrap()["irradiation"]
+            .values
+            .clone()
+            .unwrap();
+        assert_eq!(
+            values,
+            serde_json::json!([[0, null, 1], [1, null, 0]]),
+            "null holes must survive and indices must compact in first-encounter order"
+        );
+
+        let mut m: Vec<(usize, usize)> = m_oldnew.into_iter().collect();
+        m.sort();
+        assert_eq!(m, vec![(0, 0), (2, 1)]);
     }
 
     #[test]
