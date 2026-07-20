@@ -242,11 +242,22 @@ mod tests {
     /// document level, asserting on the serialized *string* -- not a
     /// re-parsed `Value` -- so a change that reorders or reformats output
     /// would fail this test even though it would pass a structural check.
+    ///
+    /// The extra `"+noiseLevel"` member is deliberate and load-bearing: it is
+    /// *not* `"attributes"` (that member has its own dedicated,
+    /// already-typed `CityObject` field and so would never touch `other` at
+    /// all) but a genuinely unrecognized top-level member, so it is the one
+    /// that actually exercises `#[serde(flatten)] other: serde_json::Value`.
+    /// It carries a nested object (not a bare scalar) to prove nested
+    /// content survives too, and there is exactly one such extra member,
+    /// because `other`'s `serde_json::Map` has no stable iteration order
+    /// once it holds two or more keys.
     #[test]
     fn extension_typed_city_object_roundtrips_byte_for_byte_inside_a_feature() {
         let input = concat!(
             r#"{"type":"CityJSONFeature","id":"id-1","#,
-            r#""CityObjects":{"id-1":{"type":"+NoiseCityFurnitureSegment"}},"#,
+            r#""CityObjects":{"id-1":{"type":"+NoiseCityFurnitureSegment","#,
+            r#""+noiseLevel":{"dB":55}}},"#,
             r#""vertices":[]}"#
         );
         let parsed: crate::cityjson::CityJSONFeature = serde_json::from_str(input).unwrap();
@@ -257,7 +268,8 @@ mod tests {
         let reserialized = serde_json::to_string(&parsed).unwrap();
         assert_eq!(
             reserialized, input,
-            "an Extension-typed CityObject inside a CityJSONFeature must round-trip byte-for-byte"
+            "an Extension-typed CityObject with an extra flattened member inside a \
+             CityJSONFeature must round-trip byte-for-byte"
         );
     }
 

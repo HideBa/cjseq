@@ -355,17 +355,24 @@ mod tests {
     /// member. Asserts on the serialized *string*, not a re-parsed `Value`,
     /// so a change to `other`/flatten handling would fail this even with an
     /// otherwise-green suite.
+    ///
+    /// `"azimuth"` (lifted from the spec's own `"+ThermalSurface"` example,
+    /// § 8.5) is the one extra, genuinely unrecognized member landing in
+    /// `#[serde(flatten)] other: HashMap<String, Value>`; kept to exactly
+    /// one key since that `HashMap` has no stable iteration order once it
+    /// holds two or more.
     #[test]
     fn extension_typed_semantics_surface_roundtrips_byte_for_byte_inside_a_geometry() {
         let input = concat!(
             r#"{"type":"MultiSurface","boundaries":[[[0,1,2]]],"#,
-            r#""semantics":{"surfaces":[{"type":"+ThermalSurface"}],"values":[0]}}"#
+            r#""semantics":{"surfaces":[{"type":"+ThermalSurface","azimuth":30.5}],"values":[0]}}"#
         );
         let parsed: crate::geometry::Geometry = serde_json::from_str(input).unwrap();
         let reserialized = serde_json::to_string(&parsed).unwrap();
         assert_eq!(
             reserialized, input,
-            "an Extension-typed SemanticsSurface inside a Geometry must round-trip byte-for-byte"
+            "an Extension-typed SemanticsSurface with an extra flattened member inside a \
+             Geometry must round-trip byte-for-byte"
         );
     }
 
