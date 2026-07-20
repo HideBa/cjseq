@@ -278,8 +278,10 @@ impl Geometry {
                 mat.value = Some(*m_oldnew.entry(thevalue).or_insert(l));
                 continue;
             }
-            //-- else it's material.values, one index per surface
-            let Some(values) = mat.values.as_mut() else {
+            //-- else it's material.values, one index per surface. The outer
+            //-- Option is present-vs-absent, the inner null-vs-array; there is
+            //-- nothing to renumber unless both are Some.
+            let Some(values) = mat.values.as_mut().and_then(|v| v.as_mut()) else {
                 continue;
             };
             for x in values.indices_mut() {

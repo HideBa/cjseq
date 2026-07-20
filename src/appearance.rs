@@ -104,13 +104,41 @@ impl TextureValues {
     }
 }
 
+/// Keep an explicit `null` distinct from an absent member.
+///
+/// `serde_json` maps a JSON `null` onto the *outer* `None` of a plain
+/// `Option<Option<T>>`, which collapses `{"values": null}` and `{}` onto the
+/// same value and re-emits the first as the second. Deserializing the inner
+/// `Option<T>` and wrapping that in `Some` keeps the two apart.
+///
+/// This delegates entirely to the derived `Deserialize` of `T` — it writes no
+/// visitor — and it does not touch serialization, which stays fully derived.
+fn present_even_if_null<'de, T, D>(de: D) -> std::result::Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    T::deserialize(de).map(Some)
+}
+
 /// One theme's material assignment for a geometry: either a `value` colouring
 /// the whole object, or a depth-typed `values` array with one index per
 /// surface.
+///
+/// The schema requires exactly one of the two
+/// (`oneOf: [{required: ["value"]}, {required: ["values"]}]`) but separately
+/// permits `"values": null`. So `values` is a *double* option: the outer level
+/// is present-vs-absent, the inner is `null`-vs-array. Without that
+/// distinction a schema-valid `{"values": null}` re-emits as `{}`, which
+/// satisfies neither branch of the `oneOf` and is rejected by a validator.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MaterialReference {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<MaterialValues>,
+    #[serde(
+        default,
+        deserialize_with = "present_even_if_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub values: Option<Option<MaterialValues>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<usize>,
 }
@@ -412,9 +440,60 @@ mod tests {
             serde_json::json!({})
         );
 
+        //-- Documented leniency, NOT a schema claim: `texture.values` is typed
+        //-- `"type": "array"`, so `{"values": null}` is *invalid* CityJSON. A
+        //-- plain `Option` field accepts it anyway, and normalizes it to the
+        //-- valid `{}` on the way out. Pinned so the normalization is
+        //-- deliberate rather than incidental.
         let null: TextureReference =
             serde_json::from_value(serde_json::json!({"values": null})).unwrap();
         assert_eq!(null.values, None);
+        assert_eq!(serde_json::to_value(&null).unwrap(), serde_json::json!({}));
+    }
+
+    /// A `material` theme has three distinct states, and the schema
+    /// distinguishes all three: absent (invalid on its own, but the `value`
+    /// sibling may be carrying the assignment), explicitly `null`, and an
+    /// array. Collapsing `null` onto absent re-emits `{"values": null}` as
+    /// `{}`, which satisfies neither branch of the schema's
+    /// `oneOf: [{required: ["value"]}, {required: ["values"]}]`.
+    #[test]
+    fn material_values_distinguishes_absent_from_null_from_array() {
+        //-- absent: only `value` carries the assignment
+        let absent: MaterialReference =
+            serde_json::from_value(serde_json::json!({"value": 3})).unwrap();
+        assert_eq!(absent.values, None);
+        assert_eq!(
+            serde_json::to_value(&absent).unwrap(),
+            serde_json::json!({"value": 3}),
+            "an absent `values` must stay absent"
+        );
+
+        //-- explicitly null: "no materials anywhere on this geometry"
+        let null: MaterialReference =
+            serde_json::from_value(serde_json::json!({"values": null})).unwrap();
+        assert_eq!(null.values, Some(None));
+        assert_eq!(
+            serde_json::to_value(&null).unwrap(),
+            serde_json::json!({"values": null}),
+            "an explicit `null` must be written back as `null`, not dropped"
+        );
+
+        //-- an array: the ordinary case
+        let array: MaterialReference =
+            serde_json::from_value(serde_json::json!({"values": [0, 1]})).unwrap();
+        assert_eq!(
+            array.values,
+            Some(Some(MaterialValues::Surfaces(vec![Some(0), Some(1)])))
+        );
+        assert_eq!(
+            serde_json::to_value(&array).unwrap(),
+            serde_json::json!({"values": [0, 1]})
+        );
+
+        //-- and a bare `{}` stays `{}` rather than gaining a null
+        let empty: MaterialReference = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&empty).unwrap(), serde_json::json!({}));
     }
 
     /// Texture values are nested exactly as deeply as the boundaries of the
