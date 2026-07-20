@@ -3,7 +3,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// A closed sequence of vertex indices bounding a face.
+pub type Ring = Vec<usize>;
+/// A face: the exterior ring first, then any interior rings.
+pub type Surface = Vec<Ring>;
+/// A closed collection of surfaces bounding a volume.
+pub type Shell = Vec<Surface>;
+
+/// The tag of a [`Geometry`], for callers that need the kind without matching
+/// on the whole enum.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeometryType {
     MultiPoint,
     MultiLineString,
@@ -15,429 +24,414 @@ pub enum GeometryType {
     GeometryInstance,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Geometry {
-    #[serde(rename = "type")]
-    pub thetype: GeometryType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lod: Option<String>,
-    pub boundaries: Value,
+/// The members every geometry may carry that are neither its type, its lod,
+/// nor its boundaries.
+///
+/// `semantics` and the appearance values stay untyped for now; typing them is
+/// the subject of later work.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct GeometryCommon {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantics: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub material: Option<HashMap<String, Material>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub texture: Option<HashMap<String, Texture>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub template: Option<usize>,
-    #[serde(rename = "transformationMatrix")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transformation_matrix: Option<Value>,
 }
+
+/// A CityJSON geometry object.
+///
+/// The nesting depth of `boundaries` is part of the type: a `MultiSurface`
+/// whose boundaries are nested one level too deep does not deserialize, where
+/// previously it decoded happily into an untyped `serde_json::Value` and left
+/// every consumer to guess the depth.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type")]
+pub enum Geometry {
+    MultiPoint {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Ring,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    MultiLineString {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Vec<Ring>,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    MultiSurface {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Vec<Surface>,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    CompositeSurface {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Vec<Surface>,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    Solid {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Vec<Shell>,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    MultiSolid {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Vec<Vec<Shell>>,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    CompositeSolid {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lod: Option<String>,
+        boundaries: Vec<Vec<Shell>>,
+        #[serde(flatten)]
+        common: GeometryCommon,
+    },
+    GeometryInstance {
+        boundaries: Ring,
+        template: usize,
+        #[serde(rename = "transformationMatrix")]
+        transformation_matrix: [f64; 16],
+    },
+}
+
 impl Geometry {
+    pub fn geometry_type(&self) -> GeometryType {
+        match self {
+            Geometry::MultiPoint { .. } => GeometryType::MultiPoint,
+            Geometry::MultiLineString { .. } => GeometryType::MultiLineString,
+            Geometry::MultiSurface { .. } => GeometryType::MultiSurface,
+            Geometry::CompositeSurface { .. } => GeometryType::CompositeSurface,
+            Geometry::Solid { .. } => GeometryType::Solid,
+            Geometry::MultiSolid { .. } => GeometryType::MultiSolid,
+            Geometry::CompositeSolid { .. } => GeometryType::CompositeSolid,
+            Geometry::GeometryInstance { .. } => GeometryType::GeometryInstance,
+        }
+    }
+
+    /// The lod of this geometry; a [`Geometry::GeometryInstance`] has none.
+    pub fn lod(&self) -> Option<&str> {
+        match self {
+            Geometry::MultiPoint { lod, .. }
+            | Geometry::MultiLineString { lod, .. }
+            | Geometry::MultiSurface { lod, .. }
+            | Geometry::CompositeSurface { lod, .. }
+            | Geometry::Solid { lod, .. }
+            | Geometry::MultiSolid { lod, .. }
+            | Geometry::CompositeSolid { lod, .. } => lod.as_deref(),
+            Geometry::GeometryInstance { .. } => None,
+        }
+    }
+
+    /// The semantics/material/texture members, if this variant has them.
+    /// A [`Geometry::GeometryInstance`] carries none: its appearance lives on
+    /// the template it refers to.
+    pub fn common(&self) -> Option<&GeometryCommon> {
+        match self {
+            Geometry::MultiPoint { common, .. }
+            | Geometry::MultiLineString { common, .. }
+            | Geometry::MultiSurface { common, .. }
+            | Geometry::CompositeSurface { common, .. }
+            | Geometry::Solid { common, .. }
+            | Geometry::MultiSolid { common, .. }
+            | Geometry::CompositeSolid { common, .. } => Some(common),
+            Geometry::GeometryInstance { .. } => None,
+        }
+    }
+
+    pub fn common_mut(&mut self) -> Option<&mut GeometryCommon> {
+        match self {
+            Geometry::MultiPoint { common, .. }
+            | Geometry::MultiLineString { common, .. }
+            | Geometry::MultiSurface { common, .. }
+            | Geometry::CompositeSurface { common, .. }
+            | Geometry::Solid { common, .. }
+            | Geometry::MultiSolid { common, .. }
+            | Geometry::CompositeSolid { common, .. } => Some(common),
+            Geometry::GeometryInstance { .. } => None,
+        }
+    }
+
+    /// Every vertex index in `boundaries`, in document order, whatever the
+    /// nesting depth of this variant. The depth is known statically per
+    /// variant, so no runtime inspection of the boundaries is needed.
+    fn boundary_indices_mut(&mut self) -> Box<dyn Iterator<Item = &mut usize> + '_> {
+        match self {
+            Geometry::MultiPoint { boundaries, .. }
+            | Geometry::GeometryInstance { boundaries, .. } => Box::new(boundaries.iter_mut()),
+            Geometry::MultiLineString { boundaries, .. } => {
+                Box::new(boundaries.iter_mut().flatten())
+            }
+            Geometry::MultiSurface { boundaries, .. }
+            | Geometry::CompositeSurface { boundaries, .. } => {
+                Box::new(boundaries.iter_mut().flatten().flatten())
+            }
+            Geometry::Solid { boundaries, .. } => {
+                Box::new(boundaries.iter_mut().flatten().flatten().flatten())
+            }
+            Geometry::MultiSolid { boundaries, .. }
+            | Geometry::CompositeSolid { boundaries, .. } => Box::new(
+                boundaries
+                    .iter_mut()
+                    .flatten()
+                    .flatten()
+                    .flatten()
+                    .flatten(),
+            ),
+        }
+    }
+
     pub(crate) fn update_geometry_boundaries(&mut self, violdnew: &mut HashMap<usize, usize>) {
-        match self.thetype {
-            GeometryType::MultiPoint => {
-                let a: Vec<usize> = serde_json::from_value(self.boundaries.clone()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    let kk = violdnew.get(&x);
-                    if kk.is_none() {
-                        let l = violdnew.len();
-                        violdnew.insert(*x, l);
-                        a2[i] = l;
-                    } else {
-                        let kk = kk.unwrap();
-                        a2[i] = *kk;
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::MultiLineString => {
-                let a: Vec<Vec<usize>> = serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        // r.push(z);
-                        let kk = violdnew.get(&y);
-                        if kk.is_none() {
-                            let l = violdnew.len();
-                            violdnew.insert(*y, l);
-                            a2[i][j] = l;
-                        } else {
-                            let kk = kk.unwrap();
-                            a2[i][j] = *kk;
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                let a: Vec<Vec<Vec<usize>>> =
-                    serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        for (k, z) in y.iter().enumerate() {
-                            let kk = violdnew.get(&z);
-                            if kk.is_none() {
-                                let l = violdnew.len();
-                                violdnew.insert(*z, l);
-                                a2[i][j][k] = l;
-                            } else {
-                                let kk = kk.unwrap();
-                                a2[i][j][k] = *kk;
-                            }
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::Solid => {
-                let a: Vec<Vec<Vec<Vec<usize>>>> =
-                    serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        for (k, z) in y.iter().enumerate() {
-                            for (l, zz) in z.iter().enumerate() {
-                                let kk = violdnew.get(&zz);
-                                if kk.is_none() {
-                                    let l2 = violdnew.len();
-                                    violdnew.insert(*zz, l2);
-                                    a2[i][j][k][l] = l2;
-                                } else {
-                                    let kk = kk.unwrap();
-                                    a2[i][j][k][l] = *kk;
-                                }
-                            }
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::MultiSolid | GeometryType::CompositeSolid => {
-                let a: Vec<Vec<Vec<Vec<Vec<usize>>>>> =
-                    serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        for (k, z) in y.iter().enumerate() {
-                            for (l, zz) in z.iter().enumerate() {
-                                for (m, zzz) in zz.iter().enumerate() {
-                                    let kk = violdnew.get(&zzz);
-                                    if kk.is_none() {
-                                        let l2 = violdnew.len();
-                                        violdnew.insert(*zzz, l2);
-                                        a2[i][j][k][l][m] = l2;
-                                    } else {
-                                        let kk = kk.unwrap();
-                                        a2[i][j][k][l][m] = *kk;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::GeometryInstance => {
-                let a: Vec<usize> = serde_json::from_value(self.boundaries.clone()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    let kk = violdnew.get(&x);
-                    if kk.is_none() {
-                        let l = violdnew.len();
-                        violdnew.insert(*x, l);
-                        a2[i] = l;
-                    } else {
-                        let kk = kk.unwrap();
-                        a2[i] = *kk;
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
+        for vi in self.boundary_indices_mut() {
+            let next = violdnew.len();
+            *vi = *violdnew.entry(*vi).or_insert(next);
         }
     }
 
     pub(crate) fn offset_geometry_boundaries(&mut self, offset: usize) {
-        match self.thetype {
-            GeometryType::MultiPoint => {
-                let a: Vec<usize> = serde_json::from_value(self.boundaries.clone()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    a2[i] = *x + offset;
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::MultiLineString => {
-                let a: Vec<Vec<usize>> = serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        // r.push(z);
-                        a2[i][j] = *y + offset;
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                let a: Vec<Vec<Vec<usize>>> =
-                    serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        for (k, z) in y.iter().enumerate() {
-                            a2[i][j][k] = *z + offset;
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::Solid => {
-                let a: Vec<Vec<Vec<Vec<usize>>>> =
-                    serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        for (k, z) in y.iter().enumerate() {
-                            for (l, zz) in z.iter().enumerate() {
-                                a2[i][j][k][l] = *zz + offset;
-                            }
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::MultiSolid | GeometryType::CompositeSolid => {
-                let a: Vec<Vec<Vec<Vec<Vec<usize>>>>> =
-                    serde_json::from_value(self.boundaries.take()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    for (j, y) in x.iter().enumerate() {
-                        for (k, z) in y.iter().enumerate() {
-                            for (l, zz) in z.iter().enumerate() {
-                                for (m, zzz) in zz.iter().enumerate() {
-                                    a2[i][j][k][l][m] = *zzz + offset;
-                                }
-                            }
-                        }
-                    }
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
-            GeometryType::GeometryInstance => {
-                let a: Vec<usize> = serde_json::from_value(self.boundaries.clone()).unwrap();
-                let mut a2 = a.clone();
-                for (i, x) in a.iter().enumerate() {
-                    a2[i] = *x + offset;
-                }
-                self.boundaries = serde_json::to_value(&a2).unwrap();
-            }
+        for vi in self.boundary_indices_mut() {
+            *vi += offset;
         }
     }
 
     pub(crate) fn update_material(&mut self, m_oldnew: &mut HashMap<usize, usize>) {
-        match &mut self.material {
-            Some(x) => {
-                for (_key, mat) in &mut *x {
-                    //-- material.value
-                    if mat.value.is_some() {
-                        let thevalue: usize = mat.value.unwrap();
-                        let r = m_oldnew.get(&thevalue);
-                        if r.is_none() {
-                            let l = m_oldnew.len();
-                            m_oldnew.insert(thevalue, l);
-                            mat.value = Some(l);
-                        } else {
-                            let r2 = r.unwrap();
-                            mat.value = Some(*r2);
-                        }
-                        continue;
-                    }
-                    //-- else it's material.values (which differs per geom type)
-                    match self.thetype {
-                        GeometryType::MultiPoint | GeometryType::MultiLineString => (),
-                        GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                            if mat.values.is_some() {
-                                let a: Vec<Option<usize>> =
-                                    serde_json::from_value(mat.values.take().into()).unwrap();
-                                let mut a2 = a.clone();
-                                for (i, x) in a.iter().enumerate() {
-                                    if x.is_some() {
-                                        let y2 = m_oldnew.get(&x.unwrap());
-                                        if y2.is_none() {
-                                            let l = m_oldnew.len();
-                                            m_oldnew.insert(x.unwrap(), l);
-                                            a2[i] = Some(l);
-                                        } else {
-                                            let y2 = y2.unwrap();
-                                            a2[i] = Some(*y2);
-                                        }
-                                    }
-                                }
-                                mat.values = Some(serde_json::to_value(&a2).unwrap());
-                            }
-                        }
-                        GeometryType::Solid => {
-                            if mat.values.is_some() {
-                                let a: Vec<Vec<Option<usize>>> =
-                                    serde_json::from_value(mat.values.take().into()).unwrap();
-                                let mut a2 = a.clone();
-                                for (i, x) in a.iter().enumerate() {
-                                    for (j, y) in x.iter().enumerate() {
-                                        if y.is_some() {
-                                            let y2 = m_oldnew.get(&y.unwrap());
-                                            if y2.is_none() {
-                                                let l = m_oldnew.len();
-                                                m_oldnew.insert(y.unwrap(), l);
-                                                a2[i][j] = Some(l);
-                                            } else {
-                                                let y2 = y2.unwrap();
-                                                a2[i][j] = Some(*y2);
-                                            }
-                                        }
-                                    }
-                                }
-                                mat.values = Some(serde_json::to_value(&a2).unwrap());
-                            }
-                        }
-                        GeometryType::MultiSolid | GeometryType::CompositeSolid => {
-                            if mat.values.is_some() {
-                                let a: Vec<Vec<Vec<Option<usize>>>> =
-                                    serde_json::from_value(mat.values.take().into()).unwrap();
-                                let mut a2 = a.clone();
-                                for (i, x) in a.iter().enumerate() {
-                                    for (j, y) in x.iter().enumerate() {
-                                        for (k, z) in y.iter().enumerate() {
-                                            if z.is_some() {
-                                                let y2 = m_oldnew.get(&z.unwrap());
-                                                if y2.is_none() {
-                                                    let l = m_oldnew.len();
-                                                    m_oldnew.insert(z.unwrap(), l);
-                                                    a2[i][j][k] = Some(l);
-                                                } else {
-                                                    let y2 = y2.unwrap();
-                                                    a2[i][j][k] = Some(*y2);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                mat.values = Some(serde_json::to_value(&a2).unwrap());
-                            }
-                        }
-                        GeometryType::GeometryInstance => todo!(),
-                    }
-                }
-                self.material = Some(x.clone());
+        let thetype = self.geometry_type();
+        let Some(common) = self.common_mut() else {
+            return;
+        };
+        let Some(materials) = common.material.as_mut() else {
+            return;
+        };
+        for mat in materials.values_mut() {
+            //-- material.value
+            if let Some(thevalue) = mat.value {
+                let l = m_oldnew.len();
+                mat.value = Some(*m_oldnew.entry(thevalue).or_insert(l));
+                continue;
             }
-            None => (),
+            //-- else it's material.values (which differs per geom type)
+            if mat.values.is_none() {
+                continue;
+            }
+            match thetype {
+                GeometryType::MultiPoint | GeometryType::MultiLineString => (),
+                GeometryType::MultiSurface | GeometryType::CompositeSurface => {
+                    let mut a: Vec<Option<usize>> =
+                        serde_json::from_value(mat.values.take().into()).unwrap();
+                    for x in a.iter_mut().flatten() {
+                        let l = m_oldnew.len();
+                        *x = *m_oldnew.entry(*x).or_insert(l);
+                    }
+                    mat.values = Some(serde_json::to_value(&a).unwrap());
+                }
+                GeometryType::Solid => {
+                    let mut a: Vec<Vec<Option<usize>>> =
+                        serde_json::from_value(mat.values.take().into()).unwrap();
+                    for x in a.iter_mut().flatten().flatten() {
+                        let l = m_oldnew.len();
+                        *x = *m_oldnew.entry(*x).or_insert(l);
+                    }
+                    mat.values = Some(serde_json::to_value(&a).unwrap());
+                }
+                GeometryType::MultiSolid | GeometryType::CompositeSolid => {
+                    let mut a: Vec<Vec<Vec<Option<usize>>>> =
+                        serde_json::from_value(mat.values.take().into()).unwrap();
+                    for x in a.iter_mut().flatten().flatten().flatten() {
+                        let l = m_oldnew.len();
+                        *x = *m_oldnew.entry(*x).or_insert(l);
+                    }
+                    mat.values = Some(serde_json::to_value(&a).unwrap());
+                }
+                GeometryType::GeometryInstance => unreachable!(
+                    "GeometryInstance carries no material; common_mut() returned None above"
+                ),
+            }
         }
     }
+
     pub(crate) fn update_texture(
         &mut self,
         t_oldnew: &mut HashMap<usize, usize>,
         t_v_oldnew: &mut HashMap<usize, usize>,
         offset: usize,
     ) {
-        match &mut self.texture {
-            Some(x) => {
-                for (_key, tex) in &mut *x {
-                    match self.thetype {
-                        GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                            let a: Vec<Vec<Vec<Option<usize>>>> =
-                                serde_json::from_value(tex.values.take().into()).unwrap();
-                            let mut a2 = a.clone();
-                            for (i, x) in a.iter().enumerate() {
-                                for (j, y) in x.iter().enumerate() {
-                                    for (k, z) in y.iter().enumerate() {
-                                        if z.is_some() {
-                                            let thevalue: usize = z.unwrap();
-                                            if k == 0 {
-                                                let y2 = t_oldnew.get(&thevalue);
-                                                if y2.is_none() {
-                                                    let l = t_oldnew.len();
-                                                    t_oldnew.insert(thevalue, l);
-                                                    a2[i][j][k] = Some(l);
-                                                } else {
-                                                    let y2 = y2.unwrap();
-                                                    a2[i][j][k] = Some(*y2);
-                                                }
-                                            } else {
-                                                let y2 = t_v_oldnew.get(&thevalue);
-                                                if y2.is_none() {
-                                                    let l = t_v_oldnew.len();
-                                                    t_v_oldnew.insert(thevalue, l + offset);
-                                                    a2[i][j][k] = Some(l);
-                                                } else {
-                                                    let y2 = y2.unwrap();
-                                                    a2[i][j][k] = Some(*y2);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            tex.values = Some(serde_json::to_value(&a2).unwrap());
-                        }
-                        GeometryType::Solid => {
-                            let a: Vec<Vec<Vec<Vec<Option<usize>>>>> =
-                                serde_json::from_value(tex.values.take().into()).unwrap();
-                            let mut a2 = a.clone();
-                            for (i, x) in a.iter().enumerate() {
-                                for (j, y) in x.iter().enumerate() {
-                                    for (k, z) in y.iter().enumerate() {
-                                        for (l, zz) in z.iter().enumerate() {
-                                            if zz.is_some() {
-                                                let thevalue: usize = zz.unwrap();
-                                                if l == 0 {
-                                                    let y2 = t_oldnew.get(&thevalue);
-                                                    if y2.is_none() {
-                                                        let l2 = t_oldnew.len();
-                                                        t_oldnew.insert(thevalue, l2);
-                                                        a2[i][j][k][l] = Some(l2);
-                                                    } else {
-                                                        let y2 = y2.unwrap();
-                                                        a2[i][j][k][l] = Some(*y2);
-                                                    }
-                                                } else {
-                                                    let y2 = t_v_oldnew.get(&thevalue);
-                                                    if y2.is_none() {
-                                                        let l2 = t_v_oldnew.len();
-                                                        t_v_oldnew.insert(thevalue, l2 + offset);
-                                                        a2[i][j][k][l] = Some(l2);
-                                                    } else {
-                                                        let y2 = y2.unwrap();
-                                                        a2[i][j][k][l] = Some(*y2);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            tex.values = Some(serde_json::to_value(&a2).unwrap());
-                        }
-                        _ => todo!(),
+        let thetype = self.geometry_type();
+        let Some(common) = self.common_mut() else {
+            return;
+        };
+        let Some(textures) = common.texture.as_mut() else {
+            return;
+        };
+        //-- the first index of the innermost array is a texture, the rest are
+        //-- texture vertices; they are renumbered against different maps.
+        let mut remap = |is_texture: bool, thevalue: usize| -> usize {
+            if is_texture {
+                let l = t_oldnew.len();
+                *t_oldnew.entry(thevalue).or_insert(l)
+            } else {
+                match t_v_oldnew.get(&thevalue) {
+                    Some(y) => *y,
+                    None => {
+                        let l = t_v_oldnew.len();
+                        t_v_oldnew.insert(thevalue, l + offset);
+                        l
                     }
                 }
             }
-            None => (),
+        };
+        for tex in textures.values_mut() {
+            match thetype {
+                GeometryType::MultiSurface | GeometryType::CompositeSurface => {
+                    let mut a: Vec<Vec<Vec<Option<usize>>>> =
+                        serde_json::from_value(tex.values.take().into()).unwrap();
+                    for y in a.iter_mut().flatten() {
+                        for (k, z) in y.iter_mut().enumerate() {
+                            if let Some(thevalue) = *z {
+                                *z = Some(remap(k == 0, thevalue));
+                            }
+                        }
+                    }
+                    tex.values = Some(serde_json::to_value(&a).unwrap());
+                }
+                GeometryType::Solid => {
+                    let mut a: Vec<Vec<Vec<Vec<Option<usize>>>>> =
+                        serde_json::from_value(tex.values.take().into()).unwrap();
+                    for z in a.iter_mut().flatten().flatten() {
+                        for (l, zz) in z.iter_mut().enumerate() {
+                            if let Some(thevalue) = *zz {
+                                *zz = Some(remap(l == 0, thevalue));
+                            }
+                        }
+                    }
+                    tex.values = Some(serde_json::to_value(&a).unwrap());
+                }
+                _ => todo!(),
+            }
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Vertex {
-    x: i64,
-    y: i64,
-    z: i64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct GeometryTemplates {
     pub templates: Vec<Geometry>,
     #[serde(rename = "vertices-templates")]
     pub vertices_templates: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(v: serde_json::Value) -> Result<Geometry, serde_json::Error> {
+        serde_json::from_value(v)
+    }
+
+    #[test]
+    fn each_variant_has_its_own_depth() {
+        let cases = [
+            (GeometryType::MultiPoint, serde_json::json!([0, 1])),
+            (GeometryType::MultiLineString, serde_json::json!([[0, 1]])),
+            (GeometryType::MultiSurface, serde_json::json!([[[0, 1, 2]]])),
+            (
+                GeometryType::CompositeSurface,
+                serde_json::json!([[[0, 1, 2]]]),
+            ),
+            (GeometryType::Solid, serde_json::json!([[[[0, 1, 2]]]])),
+            (GeometryType::MultiSolid, serde_json::json!([[[[[0, 1, 2]]]]])),
+            (
+                GeometryType::CompositeSolid,
+                serde_json::json!([[[[[0, 1, 2]]]]]),
+            ),
+        ];
+        for (thetype, boundaries) in cases {
+            let name = serde_json::to_value(thetype).unwrap();
+            let g = parse(serde_json::json!({
+                "type": name, "lod": "1", "boundaries": boundaries.clone()
+            }))
+            .unwrap_or_else(|e| panic!("{name} must accept its own depth: {e}"));
+            assert_eq!(g.geometry_type(), thetype);
+            assert_eq!(g.lod(), Some("1"));
+
+            //-- one level too deep must be rejected
+            let too_deep = serde_json::json!([boundaries]);
+            assert!(
+                parse(serde_json::json!({
+                    "type": name, "lod": "1", "boundaries": too_deep
+                }))
+                .is_err(),
+                "{name} must reject boundaries one level too deep"
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_instance_roundtrips() {
+        let input = serde_json::json!({
+            "type": "GeometryInstance",
+            "boundaries": [372],
+            "template": 0,
+            "transformationMatrix": [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            ]
+        });
+        let g: Geometry = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(g.geometry_type(), GeometryType::GeometryInstance);
+        assert!(g.common().is_none());
+        assert_eq!(serde_json::to_value(&g).unwrap(), input);
+    }
+
+    #[test]
+    fn offset_walks_every_depth() {
+        let mut g: Geometry = serde_json::from_value(serde_json::json!({
+            "type": "CompositeSolid", "lod": "2",
+            "boundaries": [[[[[0, 1]]]], [[[[2, 3]]]]]
+        }))
+        .unwrap();
+        g.offset_geometry_boundaries(10);
+        assert_eq!(
+            serde_json::to_value(&g).unwrap()["boundaries"],
+            serde_json::json!([[[[[10, 11]]]], [[[[12, 13]]]]])
+        );
+    }
+
+    #[test]
+    fn update_boundaries_compacts_indices() {
+        let mut g: Geometry = serde_json::from_value(serde_json::json!({
+            "type": "MultiSurface", "lod": "2",
+            "boundaries": [[[7, 9, 7]], [[9, 4, 4]]]
+        }))
+        .unwrap();
+        let mut map: HashMap<usize, usize> = HashMap::new();
+        g.update_geometry_boundaries(&mut map);
+        assert_eq!(
+            serde_json::to_value(&g).unwrap()["boundaries"],
+            serde_json::json!([[[0, 1, 0]], [[1, 2, 2]]])
+        );
+        assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn absent_members_are_not_serialized_as_null() {
+        let g: Geometry = serde_json::from_value(serde_json::json!({
+            "type": "MultiSurface", "boundaries": [[[0, 1, 2]]]
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&g).unwrap(),
+            serde_json::json!({"type": "MultiSurface", "boundaries": [[[0, 1, 2]]]})
+        );
+    }
 }
