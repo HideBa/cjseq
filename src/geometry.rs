@@ -1,4 +1,5 @@
 use crate::appearance::{Material, Texture};
+use crate::semantics::Semantics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -27,12 +28,12 @@ pub enum GeometryType {
 /// The members every geometry may carry that are neither its type, its lod,
 /// nor its boundaries.
 ///
-/// `semantics` and the appearance values stay untyped for now; typing them is
-/// the subject of later work.
+/// The appearance values stay untyped for now; typing them is the subject of
+/// later work.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct GeometryCommon {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantics: Option<Value>,
+    pub semantics: Option<Semantics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub material: Option<HashMap<String, Material>>,
     #[serde(skip_serializing_if = "Option::is_none")]

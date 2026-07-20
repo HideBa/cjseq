@@ -8,6 +8,7 @@
 //!
 //! Internally the crate is organised into one module per concern:
 //! - `geometry` — `Geometry`, `GeometryType`, `GeometryTemplates`
+//! - `semantics` — `Semantics`, `SemanticsSurface`, `SemanticsValues`
 //! - `appearance` — `Appearance`, `Material`, `Texture`
 //! - `city_object` — `CityObject`
 //! - `metadata` — `Metadata`, `PointOfContact`, `Address`, `ReferenceSystem`, `Transform`, `GeographicalExtent`
@@ -22,12 +23,14 @@ mod city_object;
 mod cityjson;
 mod geometry;
 mod metadata;
+mod semantics;
 
 pub use appearance::*;
 pub use city_object::*;
 pub use cityjson::*;
 pub use geometry::*;
 pub use metadata::*;
+pub use semantics::*;
 
 // WASM bindings module
 #[cfg(target_arch = "wasm32")]
