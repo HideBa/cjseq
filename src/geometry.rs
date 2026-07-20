@@ -1,4 +1,5 @@
-use crate::appearance::{Material, Texture};
+use crate::appearance::{MaterialReference, TextureReference};
+use crate::error::{CjseqError, Result};
 use crate::semantics::Semantics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,19 +26,39 @@ pub enum GeometryType {
     GeometryInstance,
 }
 
+impl GeometryType {
+    /// The nesting depth `boundaries` must have for this geometry type: the
+    /// number of array levels between the outermost array and a vertex index.
+    pub fn boundary_depth(self) -> usize {
+        match self {
+            GeometryType::MultiPoint | GeometryType::GeometryInstance => 1,
+            GeometryType::MultiLineString => 2,
+            GeometryType::MultiSurface | GeometryType::CompositeSurface => 3,
+            GeometryType::Solid => 4,
+            GeometryType::MultiSolid | GeometryType::CompositeSolid => 5,
+        }
+    }
+}
+
 /// The members every geometry may carry that are neither its type, its lod,
-/// nor its boundaries.
-///
-/// The appearance values stay untyped for now; typing them is the subject of
-/// later work.
+/// nor its boundaries. The appearance values are depth-typed, keyed by theme.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct GeometryCommon {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantics: Option<Semantics>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub material: Option<HashMap<String, Material>>,
+    pub material: Option<HashMap<String, MaterialReference>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub texture: Option<HashMap<String, Texture>>,
+    pub texture: Option<HashMap<String, TextureReference>>,
+}
+
+/// The number of array levels between `v` and the deepest non-array value
+/// inside it. A non-array is 0 deep; `[]` is 1 deep.
+fn nesting_depth(v: &Value) -> usize {
+    match v {
+        Value::Array(a) => 1 + a.iter().map(nesting_depth).max().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// A CityJSON geometry object.
@@ -107,6 +128,38 @@ pub enum Geometry {
 }
 
 impl Geometry {
+    /// Parse a geometry, reporting a wrong `boundaries` depth in terms of the
+    /// geometry type rather than in terms of serde's innards.
+    ///
+    /// `serde_json::from_value::<Geometry>` works just as well and is what
+    /// `#[derive(Deserialize)]` gives every containing type; the only thing
+    /// this adds is a readable error. Deserializing a deeply nested `Vec`
+    /// otherwise fails with "invalid type: integer, expected a sequence",
+    /// which says neither which geometry was at fault nor what depth it
+    /// wanted.
+    pub fn from_json_value(v: Value) -> Result<Geometry> {
+        let err = match serde_json::from_value::<Geometry>(v.clone()) {
+            Ok(g) => return Ok(g),
+            Err(e) => e,
+        };
+        //-- can the failure be pinned on the depth of `boundaries`?
+        let thetype = v
+            .get("type")
+            .and_then(|t| serde_json::from_value::<GeometryType>(t.clone()).ok());
+        if let (Some(thetype), Some(boundaries)) = (thetype, v.get("boundaries")) {
+            let expected = thetype.boundary_depth();
+            let found = nesting_depth(boundaries);
+            if found != expected {
+                return Err(CjseqError::GeometryDepth {
+                    geometry_type: thetype,
+                    expected,
+                    found: format!("these boundaries are nested {found} levels deep"),
+                });
+            }
+        }
+        Err(CjseqError::Json(err))
+    }
+
     pub fn geometry_type(&self) -> GeometryType {
         match self {
             Geometry::MultiPoint { .. } => GeometryType::MultiPoint,
@@ -205,8 +258,10 @@ impl Geometry {
         }
     }
 
+    /// Renumber every material index against `m_oldnew`, first-encounter
+    /// order. The depth of `values` comes from its variant, so the geometry
+    /// type is never consulted.
     pub(crate) fn update_material(&mut self, m_oldnew: &mut HashMap<usize, usize>) {
-        let thetype = self.geometry_type();
         let Some(common) = self.common_mut() else {
             return;
         };
@@ -214,59 +269,33 @@ impl Geometry {
             return;
         };
         for mat in materials.values_mut() {
-            //-- material.value
+            //-- material.value colours the whole object
             if let Some(thevalue) = mat.value {
                 let l = m_oldnew.len();
                 mat.value = Some(*m_oldnew.entry(thevalue).or_insert(l));
                 continue;
             }
-            //-- else it's material.values (which differs per geom type)
-            if mat.values.is_none() {
+            //-- else it's material.values, one index per surface
+            let Some(values) = mat.values.as_mut() else {
                 continue;
-            }
-            match thetype {
-                GeometryType::MultiPoint | GeometryType::MultiLineString => (),
-                GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                    let mut a: Vec<Option<usize>> =
-                        serde_json::from_value(mat.values.take().into()).unwrap();
-                    for x in a.iter_mut().flatten() {
-                        let l = m_oldnew.len();
-                        *x = *m_oldnew.entry(*x).or_insert(l);
-                    }
-                    mat.values = Some(serde_json::to_value(&a).unwrap());
-                }
-                GeometryType::Solid => {
-                    let mut a: Vec<Vec<Option<usize>>> =
-                        serde_json::from_value(mat.values.take().into()).unwrap();
-                    for x in a.iter_mut().flatten().flatten() {
-                        let l = m_oldnew.len();
-                        *x = *m_oldnew.entry(*x).or_insert(l);
-                    }
-                    mat.values = Some(serde_json::to_value(&a).unwrap());
-                }
-                GeometryType::MultiSolid | GeometryType::CompositeSolid => {
-                    let mut a: Vec<Vec<Vec<Option<usize>>>> =
-                        serde_json::from_value(mat.values.take().into()).unwrap();
-                    for x in a.iter_mut().flatten().flatten().flatten() {
-                        let l = m_oldnew.len();
-                        *x = *m_oldnew.entry(*x).or_insert(l);
-                    }
-                    mat.values = Some(serde_json::to_value(&a).unwrap());
-                }
-                GeometryType::GeometryInstance => unreachable!(
-                    "GeometryInstance carries no material; common_mut() returned None above"
-                ),
+            };
+            for x in values.indices_mut() {
+                let l = m_oldnew.len();
+                *x = *m_oldnew.entry(*x).or_insert(l);
             }
         }
     }
 
+    /// Renumber every texture index against `t_oldnew` and every texture
+    /// vertex against `t_v_oldnew`. As with `update_material`, the depth comes
+    /// from the variant, so every geometry that can carry a texture is walked
+    /// the same way.
     pub(crate) fn update_texture(
         &mut self,
         t_oldnew: &mut HashMap<usize, usize>,
         t_v_oldnew: &mut HashMap<usize, usize>,
         offset: usize,
     ) {
-        let thetype = self.geometry_type();
         let Some(common) = self.common_mut() else {
             return;
         };
@@ -291,32 +320,12 @@ impl Geometry {
             }
         };
         for tex in textures.values_mut() {
-            match thetype {
-                GeometryType::MultiSurface | GeometryType::CompositeSurface => {
-                    let mut a: Vec<Vec<Vec<Option<usize>>>> =
-                        serde_json::from_value(tex.values.take().into()).unwrap();
-                    for y in a.iter_mut().flatten() {
-                        for (k, z) in y.iter_mut().enumerate() {
-                            if let Some(thevalue) = *z {
-                                *z = Some(remap(k == 0, thevalue));
-                            }
-                        }
+            for ring in tex.values.rings_mut() {
+                for (k, z) in ring.iter_mut().enumerate() {
+                    if let Some(thevalue) = *z {
+                        *z = Some(remap(k == 0, thevalue));
                     }
-                    tex.values = Some(serde_json::to_value(&a).unwrap());
                 }
-                GeometryType::Solid => {
-                    let mut a: Vec<Vec<Vec<Vec<Option<usize>>>>> =
-                        serde_json::from_value(tex.values.take().into()).unwrap();
-                    for z in a.iter_mut().flatten().flatten() {
-                        for (l, zz) in z.iter_mut().enumerate() {
-                            if let Some(thevalue) = *zz {
-                                *zz = Some(remap(l == 0, thevalue));
-                            }
-                        }
-                    }
-                    tex.values = Some(serde_json::to_value(&a).unwrap());
-                }
-                _ => todo!(),
             }
         }
     }
@@ -333,7 +342,7 @@ pub struct GeometryTemplates {
 mod tests {
     use super::*;
 
-    fn parse(v: serde_json::Value) -> Result<Geometry, serde_json::Error> {
+    fn parse(v: serde_json::Value) -> std::result::Result<Geometry, serde_json::Error> {
         serde_json::from_value(v)
     }
 
@@ -487,10 +496,11 @@ mod tests {
         let mut t_v_oldnew: HashMap<usize, usize> = HashMap::new();
         g.update_texture(&mut t_oldnew, &mut t_v_oldnew, 100);
 
-        let values = g.common().unwrap().texture.as_ref().unwrap()["winter"]
-            .values
-            .clone()
-            .unwrap();
+        //-- `values` is now typed, so compare its serialization: the expected
+        //-- values below are untouched from the oracle run at a97bc2d.
+        let values =
+            serde_json::to_value(&g.common().unwrap().texture.as_ref().unwrap()["winter"].values)
+                .unwrap();
         assert_eq!(
             values,
             serde_json::json!([
@@ -529,10 +539,14 @@ mod tests {
         let mut m_oldnew: HashMap<usize, usize> = HashMap::new();
         g.update_material(&mut m_oldnew);
 
-        let values = g.common().unwrap().material.as_ref().unwrap()["irradiation"]
-            .values
-            .clone()
-            .unwrap();
+        //-- as above: typed `values`, oracle expectations unchanged.
+        let values = serde_json::to_value(
+            g.common().unwrap().material.as_ref().unwrap()["irradiation"]
+                .values
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             values,
             serde_json::json!([[0, null, 1], [1, null, 0]]),
@@ -542,6 +556,64 @@ mod tests {
         let mut m: Vec<(usize, usize)> = m_oldnew.into_iter().collect();
         m.sort();
         assert_eq!(m, vec![(0, 0), (2, 1)]);
+    }
+
+    /// A raw serde error on a deeply nested `Vec` reads "invalid type:
+    /// integer, expected a sequence", which names neither the geometry nor the
+    /// depth it wanted. `from_json_value` must say both.
+    #[test]
+    fn wrong_depth_reports_which_geometry_and_which_depth() {
+        let err = Geometry::from_json_value(serde_json::json!({
+            "type": "MultiSurface", "lod": "2",
+            "boundaries": [[[[0, 1, 2]]]]
+        }))
+        .unwrap_err();
+
+        match &err {
+            CjseqError::GeometryDepth {
+                geometry_type,
+                expected,
+                found,
+            } => {
+                assert_eq!(*geometry_type, GeometryType::MultiSurface);
+                assert_eq!(*expected, 3, "a MultiSurface nests boundaries 3 deep");
+                assert!(
+                    found.contains('4'),
+                    "the message must say what depth was actually found, got {found:?}"
+                );
+            }
+            other => panic!("expected a GeometryDepth error, got {other:?}"),
+        }
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MultiSurface") && msg.contains('3'),
+            "the message must name the geometry and the depth it expected, got {msg:?}"
+        );
+    }
+
+    /// A geometry whose boundaries are the right depth but which is malformed
+    /// some other way is not misreported as a depth problem.
+    #[test]
+    fn a_non_depth_failure_stays_a_json_error() {
+        let err = Geometry::from_json_value(serde_json::json!({
+            "type": "MultiSurface", "lod": "2",
+            "boundaries": [[["not an index"]]]
+        }))
+        .unwrap_err();
+        assert!(
+            matches!(err, CjseqError::Json(_)),
+            "expected a Json error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn from_json_value_accepts_a_good_geometry() {
+        let g = Geometry::from_json_value(serde_json::json!({
+            "type": "Solid", "lod": "2", "boundaries": [[[[0, 1, 2]]]]
+        }))
+        .unwrap();
+        assert_eq!(g.geometry_type(), GeometryType::Solid);
     }
 
     #[test]

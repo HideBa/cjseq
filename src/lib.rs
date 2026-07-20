@@ -9,9 +9,10 @@
 //! Internally the crate is organised into one module per concern:
 //! - `geometry` — `Geometry`, `GeometryType`, `GeometryTemplates`
 //! - `semantics` — `Semantics`, `SemanticsSurface`, `SemanticsValues`
-//! - `appearance` — `Appearance`, `Material`, `Texture`
+//! - `appearance` — `Appearance`, `MaterialReference`, `MaterialValues`, `TextureReference`, `TextureValues`
 //! - `city_object` — `CityObject`
 //! - `metadata` — `Metadata`, `PointOfContact`, `Address`, `ReferenceSystem`, `Transform`, `GeographicalExtent`
+//! - `error` — `CjseqError`, `Result`
 //! - `cityjson` — `CityJSON`, `CityJSONFeature`, `SortingStrategy`, and the sequencing/collect/filter logic
 //!
 //! Every type is re-exported at the crate root, so the module boundaries
@@ -21,6 +22,7 @@
 mod appearance;
 mod city_object;
 mod cityjson;
+mod error;
 mod geometry;
 mod metadata;
 mod semantics;
@@ -28,6 +30,7 @@ mod semantics;
 pub use appearance::*;
 pub use city_object::*;
 pub use cityjson::*;
+pub use error::*;
 pub use geometry::*;
 pub use metadata::*;
 pub use semantics::*;
