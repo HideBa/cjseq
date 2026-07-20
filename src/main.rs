@@ -1,5 +1,7 @@
 use cjseq::CityJSON;
 use cjseq::CityJSONFeature;
+use cjseq::CityJSONType;
+use cjseq::CityObjectType;
 use cjseq::Transform;
 
 extern crate clap;
@@ -202,6 +204,11 @@ fn filter_random(exclude: bool, rand_factor: u32) -> Result<(), MyError> {
 }
 
 fn filter_cotype(exclude: bool, cotype: String) -> Result<(), MyError> {
+    // The CLI accepts any type name the user types (a core type such as
+    // "Building", or an Extension type such as "+NoiseBuilding"); parse it
+    // through the same enum used for the CityObjects being filtered so the
+    // comparison below is enum-to-enum, not string-to-string.
+    let cotype: CityObjectType = serde_json::from_value(serde_json::Value::String(cotype))?;
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let mut w: bool = false;
@@ -367,7 +374,7 @@ fn cat_from_file(file: &PathBuf, order: cjseq::SortingStrategy) -> Result<(), My
 }
 
 fn cat(cjj: &mut CityJSON, order: cjseq::SortingStrategy) -> Result<(), MyError> {
-    if cjj.thetype != "CityJSON" {
+    if cjj.thetype != CityJSONType::CityJSON {
         return Err(MyError::CityJsonError(
             "Input file not CityJSON.".to_string(),
         ));

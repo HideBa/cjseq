@@ -64,7 +64,7 @@ fn basic_reading_of_cj() {
 
     cjj.sort_cjfeatures(cjseq::SortingStrategy::Lexicographical);
     let mut cjnext = cjj.get_cjfeature(0).unwrap();
-    assert_eq!(cjnext.thetype, "CityJSONFeature");
+    assert_eq!(cjnext.thetype, cjseq::CityJSONFeatureType::CityJSONFeature);
     assert_eq!(cjnext.id, "NL.IMBAG.Pand.0503100000028341");
 
     cjnext = cjj.get_cjfeature(1).unwrap();

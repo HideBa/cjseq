@@ -2,15 +2,106 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// The known surface types the spec assigns to Building-, WaterBody-, and
+/// Transportation-family City Objects (§ 3.3 Semantics of geometric
+/// primitives). Every variant is a unit variant already spelled exactly as
+/// the spec requires, so serde's default (non-untagged) derive collapses
+/// each one to its bare name string with no `#[serde(rename)]` needed.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KnownSemanticSurfaceType {
+    RoofSurface,
+    GroundSurface,
+    WallSurface,
+    ClosureSurface,
+    OuterCeilingSurface,
+    OuterFloorSurface,
+    Window,
+    Door,
+    InteriorWallSurface,
+    CeilingSurface,
+    FloorSurface,
+    WaterSurface,
+    WaterGroundSurface,
+    WaterClosureSurface,
+    TrafficArea,
+    AuxiliaryTrafficArea,
+    TransportationMarking,
+    TransportationHole,
+}
+
+/// The `type` member of a Semantic Object (§ 3.3 Semantics of geometric
+/// primitives).
+///
+/// `Known` covers the surface types above. Any other value is a CityJSON
+/// Extension semantic surface, which the spec requires to start with `"+"`
+/// (eg `"+ThermalSurface"`, § 8.5); `Extension` carries that string verbatim
+/// so it round-trips byte for byte.
+///
+/// This nests the known names inside their own unit-only enum rather than
+/// mixing unit variants with `Extension(String)` directly in one flat
+/// `#[serde(untagged)]` enum -- see [`crate::CityObjectType`]'s doc comment
+/// for why a flat mix cannot round-trip (a unit variant under `untagged`
+/// (de)serializes as `null`, not its name; this was verified empirically
+/// while building `CityObjectType`, which has the identical shape).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(untagged)]
+pub enum SemanticSurfaceType {
+    Known(KnownSemanticSurfaceType),
+    /// Not a core CityJSON semantic surface type: a CityJSON Extension
+    /// surface type, always spelled with a leading `"+"`.
+    Extension(String),
+}
+
+/// Flat, spec-spelling access to each known variant (eg
+/// `SemanticSurfaceType::RoofSurface`); see [`crate::CityObjectType`]'s
+/// equivalent block for why these are associated `const`s rather than enum
+/// variants.
+#[allow(non_upper_case_globals)]
+impl SemanticSurfaceType {
+    pub const RoofSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::RoofSurface);
+    pub const GroundSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::GroundSurface);
+    pub const WallSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::WallSurface);
+    pub const ClosureSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::ClosureSurface);
+    pub const OuterCeilingSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::OuterCeilingSurface);
+    pub const OuterFloorSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::OuterFloorSurface);
+    pub const Window: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::Window);
+    pub const Door: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::Door);
+    pub const InteriorWallSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::InteriorWallSurface);
+    pub const CeilingSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::CeilingSurface);
+    pub const FloorSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::FloorSurface);
+    pub const WaterSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::WaterSurface);
+    pub const WaterGroundSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::WaterGroundSurface);
+    pub const WaterClosureSurface: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::WaterClosureSurface);
+    pub const TrafficArea: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::TrafficArea);
+    pub const AuxiliaryTrafficArea: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::AuxiliaryTrafficArea);
+    pub const TransportationMarking: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::TransportationMarking);
+    pub const TransportationHole: SemanticSurfaceType =
+        SemanticSurfaceType::Known(KnownSemanticSurfaceType::TransportationHole);
+}
+
 /// One semantic surface: its type, its place in the parent/children hierarchy,
 /// and any further attributes the file chooses to carry.
-///
-/// `thetype` stays a `String` for now; giving it a closed set of variants is
-/// the subject of later work.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SemanticsSurface {
     #[serde(rename = "type")]
-    pub thetype: String,
+    pub thetype: SemanticSurfaceType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -225,5 +316,84 @@ mod tests {
             parse(serde_json::json!([[[]]])),
             SemanticsValues::Solids(_)
         ));
+    }
+
+    /// Extension semantic surfaces (`"+ThermalSurface"`, `"+PatioDoor"`, ...)
+    /// must survive a round trip with their leading `+` intact -- mirrors the
+    /// `CityObjectType` extension-round-trip requirement, but for surfaces.
+    #[test]
+    fn extension_semantic_surface_type_roundtrips_with_its_plus() {
+        let t: SemanticSurfaceType =
+            serde_json::from_value(serde_json::json!("+ThermalSurface")).unwrap();
+        assert_eq!(t, SemanticSurfaceType::Extension("+ThermalSurface".into()));
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!("+ThermalSurface")
+        );
+    }
+
+    #[test]
+    fn plus_prefixed_known_surface_name_lands_in_extension() {
+        let t: SemanticSurfaceType =
+            serde_json::from_value(serde_json::json!("+RoofSurface")).unwrap();
+        assert_eq!(t, SemanticSurfaceType::Extension("+RoofSurface".into()));
+        assert_ne!(t, SemanticSurfaceType::RoofSurface);
+    }
+
+    /// Every known SemanticSurfaceType name round-trips through its own unit
+    /// variant, not through Extension.
+    #[test]
+    fn every_known_semantic_surface_type_round_trips_as_its_unit_variant() {
+        let known: &[(&str, SemanticSurfaceType)] = &[
+            ("RoofSurface", SemanticSurfaceType::RoofSurface),
+            ("GroundSurface", SemanticSurfaceType::GroundSurface),
+            ("WallSurface", SemanticSurfaceType::WallSurface),
+            ("ClosureSurface", SemanticSurfaceType::ClosureSurface),
+            (
+                "OuterCeilingSurface",
+                SemanticSurfaceType::OuterCeilingSurface,
+            ),
+            ("OuterFloorSurface", SemanticSurfaceType::OuterFloorSurface),
+            ("Window", SemanticSurfaceType::Window),
+            ("Door", SemanticSurfaceType::Door),
+            (
+                "InteriorWallSurface",
+                SemanticSurfaceType::InteriorWallSurface,
+            ),
+            ("CeilingSurface", SemanticSurfaceType::CeilingSurface),
+            ("FloorSurface", SemanticSurfaceType::FloorSurface),
+            ("WaterSurface", SemanticSurfaceType::WaterSurface),
+            (
+                "WaterGroundSurface",
+                SemanticSurfaceType::WaterGroundSurface,
+            ),
+            (
+                "WaterClosureSurface",
+                SemanticSurfaceType::WaterClosureSurface,
+            ),
+            ("TrafficArea", SemanticSurfaceType::TrafficArea),
+            (
+                "AuxiliaryTrafficArea",
+                SemanticSurfaceType::AuxiliaryTrafficArea,
+            ),
+            (
+                "TransportationMarking",
+                SemanticSurfaceType::TransportationMarking,
+            ),
+            (
+                "TransportationHole",
+                SemanticSurfaceType::TransportationHole,
+            ),
+        ];
+        for (name, expected) in known {
+            let parsed: SemanticSurfaceType =
+                serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(&parsed, expected, "{name} did not parse to its own variant");
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap(),
+                serde_json::json!(name),
+                "{name} did not round-trip back to its own string"
+            );
+        }
     }
 }

@@ -17,7 +17,7 @@ pub enum SortingStrategy {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CityJSON {
     #[serde(rename = "type")]
-    pub thetype: String,
+    pub thetype: CityJSONType,
     pub version: String,
     pub transform: Transform,
     #[serde(rename = "CityObjects")]
@@ -46,7 +46,7 @@ impl CityJSON {
         let v: Vec<Vec<i64>> = Vec::new();
         let tr = Transform::new();
         CityJSON {
-            thetype: "CityJSON".to_string(),
+            thetype: CityJSONType::CityJSON,
             version: "2.0".to_string(),
             transform: tr,
             city_objects: co,
@@ -465,7 +465,7 @@ impl CityJSON {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CityJSONFeature {
     #[serde(rename = "type")]
-    pub thetype: String,
+    pub thetype: CityJSONFeatureType,
     pub id: String,
     #[serde(rename = "CityObjects")]
     pub city_objects: HashMap<String, CityObject>,
@@ -478,7 +478,7 @@ impl CityJSONFeature {
         let co: HashMap<String, CityObject> = HashMap::new();
         let v: Vec<Vec<i64>> = Vec::new();
         CityJSONFeature {
-            thetype: "CityJSONFeature".to_string(),
+            thetype: CityJSONFeatureType::CityJSONFeature,
             id: "".to_string(),
             city_objects: co,
             vertices: v,
@@ -518,4 +518,64 @@ pub fn cjseq_to_cj(mut base_cj: CityJSON, features: Vec<CityJSONFeature>) -> Cit
     base_cj.update_geographicalextent();
 
     base_cj
+}
+
+/// The `type` member of a [`CityJSON`] object. The spec fixes its value to
+/// the single string `"CityJSON"` (§ 1 CityJSON Object); unlike City Object
+/// and semantic-surface types, CityJSON does not define an Extension
+/// document type, so there is no `Extension` variant here -- a document
+/// declaring any other `type` value fails to deserialize.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CityJSONType {
+    CityJSON,
+}
+
+/// The `type` member of a [`CityJSONFeature`] object. The spec fixes its
+/// value to the single string `"CityJSONFeature"` (§ 7.2 Text sequences and
+/// streaming with CityJSONFeature); as with [`CityJSONType`], there is no
+/// Extension variant.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CityJSONFeatureType {
+    CityJSONFeature,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cityjson_type_round_trips() {
+        let t: CityJSONType = serde_json::from_value(serde_json::json!("CityJSON")).unwrap();
+        assert_eq!(t, CityJSONType::CityJSON);
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!("CityJSON")
+        );
+    }
+
+    #[test]
+    fn cityjson_type_rejects_any_other_value() {
+        assert!(
+            serde_json::from_value::<CityJSONType>(serde_json::json!("CityJSONFeature")).is_err()
+        );
+        assert!(serde_json::from_value::<CityJSONType>(serde_json::json!("+CityJSON")).is_err());
+    }
+
+    #[test]
+    fn cityjson_feature_type_round_trips() {
+        let t: CityJSONFeatureType =
+            serde_json::from_value(serde_json::json!("CityJSONFeature")).unwrap();
+        assert_eq!(t, CityJSONFeatureType::CityJSONFeature);
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!("CityJSONFeature")
+        );
+    }
+
+    #[test]
+    fn cityjson_feature_type_rejects_any_other_value() {
+        assert!(
+            serde_json::from_value::<CityJSONFeatureType>(serde_json::json!("CityJSON")).is_err()
+        );
+    }
 }
