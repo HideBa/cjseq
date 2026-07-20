@@ -703,7 +703,15 @@ impl JsonIndex for Option<usize> {
     }
 
     fn to_value(&self) -> Value {
-        Value::Array(self.iter().map(|x| x.to_value()).collect())
+        // A missing index is JSON null, exactly as for `Option<u32>` above.
+        // This used to be `Value::Array(self.iter()...)`, which is
+        // `Option::iter` -- it wrapped every material/texture index in a
+        // one-element array (`Some(1)` -> `[1]`, `None` -> `[]`) and emitted
+        // CityJSON that validators reject.
+        match self {
+            Some(x) => Value::Number(Number::from(*x as u64)),
+            None => Value::Null,
+        }
     }
 }
 
