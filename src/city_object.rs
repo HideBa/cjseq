@@ -80,6 +80,18 @@ pub enum CityObjectType {
 /// itself has exactly the two variants above -- but a `const` path is usable
 /// wherever a variant path would be: in expressions (`x == CityObjectType::Bridge`)
 /// and, because the type derives `PartialEq`/`Eq`, in match patterns too.
+///
+/// Match on the value, not a reference: `match *t { CityObjectType::Building
+/// => .., CityObjectType::Extension(ref s) => .., _ => .. }`, not `match &t`
+/// or `match t` where `t: &CityObjectType`. Matching a `const` path against a
+/// `&CityObjectType` is `E0308` ("mismatched types"), and rustc's fix-it
+/// suggests renaming the arm to a fresh binding -- which compiles, but
+/// silently turns that arm into a catch-all that matches everything, since
+/// `CityObjectType::Building` (with binding-like syntax accepted) reads as a
+/// new irrefutable binding named `Building`, not the constant. `_` is still
+/// required after `Extension(ref s)` because these are two real variants
+/// (`Known`, `Extension`), so the match isn't exhaustive over just the known
+/// names.
 #[allow(non_upper_case_globals)]
 impl CityObjectType {
     pub const Bridge: CityObjectType = CityObjectType::Known(KnownCityObjectType::Bridge);
@@ -219,6 +231,34 @@ mod tests {
         let t: CityObjectType = serde_json::from_value(serde_json::json!("+Building")).unwrap();
         assert_eq!(t, CityObjectType::Extension("+Building".into()));
         assert_ne!(t, CityObjectType::Building);
+    }
+
+    /// The stated critical requirement names a specific shape: a `CityObject`
+    /// (inside a `CityJSONFeature`, since that is how `flatcitybuf`'s
+    /// `noise_extension` fixture is shaped) whose `type` is an Extension
+    /// string, where `CityObjectType` sits behind `CityObject`'s
+    /// `#[serde(flatten)] other` field. The bare-`CityObjectType` tests above
+    /// don't exercise that flatten path at all, so this pins it at the
+    /// document level, asserting on the serialized *string* -- not a
+    /// re-parsed `Value` -- so a change that reorders or reformats output
+    /// would fail this test even though it would pass a structural check.
+    #[test]
+    fn extension_typed_city_object_roundtrips_byte_for_byte_inside_a_feature() {
+        let input = concat!(
+            r#"{"type":"CityJSONFeature","id":"id-1","#,
+            r#""CityObjects":{"id-1":{"type":"+NoiseCityFurnitureSegment"}},"#,
+            r#""vertices":[]}"#
+        );
+        let parsed: crate::cityjson::CityJSONFeature = serde_json::from_str(input).unwrap();
+        assert_eq!(
+            parsed.city_objects["id-1"].thetype,
+            CityObjectType::Extension("+NoiseCityFurnitureSegment".into())
+        );
+        let reserialized = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(
+            reserialized, input,
+            "an Extension-typed CityObject inside a CityJSONFeature must round-trip byte-for-byte"
+        );
     }
 
     /// Every known CityObjectType name round-trips through its unit variant,

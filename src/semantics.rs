@@ -56,6 +56,14 @@ pub enum SemanticSurfaceType {
 /// `SemanticSurfaceType::RoofSurface`); see [`crate::CityObjectType`]'s
 /// equivalent block for why these are associated `const`s rather than enum
 /// variants.
+///
+/// Match on the value, not a reference: `match *t {
+/// SemanticSurfaceType::RoofSurface => .., SemanticSurfaceType::Extension(ref
+/// s) => .., _ => .. }`, not `match &t`/`match t` where `t:
+/// &SemanticSurfaceType`. Matching a `const` path against a reference is
+/// `E0308`, and rustc's fix-it suggestion (rename the arm to a binding)
+/// compiles into a silent catch-all instead of the intended check -- see
+/// [`crate::CityObjectType`]'s equivalent block for the full explanation.
 #[allow(non_upper_case_globals)]
 impl SemanticSurfaceType {
     pub const RoofSurface: SemanticSurfaceType =
@@ -338,6 +346,27 @@ mod tests {
             serde_json::from_value(serde_json::json!("+RoofSurface")).unwrap();
         assert_eq!(t, SemanticSurfaceType::Extension("+RoofSurface".into()));
         assert_ne!(t, SemanticSurfaceType::RoofSurface);
+    }
+
+    /// Mirrors `city_object::tests::extension_typed_city_object_roundtrips_byte_for_byte_inside_a_feature`:
+    /// the bare-`SemanticSurfaceType` tests above never exercise the flatten
+    /// path an extension surface actually sits behind in practice -- a
+    /// `SemanticsSurface` nested inside a real `Geometry`'s `semantics`
+    /// member. Asserts on the serialized *string*, not a re-parsed `Value`,
+    /// so a change to `other`/flatten handling would fail this even with an
+    /// otherwise-green suite.
+    #[test]
+    fn extension_typed_semantics_surface_roundtrips_byte_for_byte_inside_a_geometry() {
+        let input = concat!(
+            r#"{"type":"MultiSurface","boundaries":[[[0,1,2]]],"#,
+            r#""semantics":{"surfaces":[{"type":"+ThermalSurface"}],"values":[0]}}"#
+        );
+        let parsed: crate::geometry::Geometry = serde_json::from_str(input).unwrap();
+        let reserialized = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(
+            reserialized, input,
+            "an Extension-typed SemanticsSurface inside a Geometry must round-trip byte-for-byte"
+        );
     }
 
     /// Every known SemanticSurfaceType name round-trips through its own unit
