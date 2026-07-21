@@ -162,6 +162,12 @@ pub struct CityObject {
     pub geometry: Option<Vec<Geometry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<String>>,
+    /// § 2.5 CityObjectGroup only: the role of each id in `children`, in the
+    /// same order. `cityobjects.schema.json` types each item as
+    /// `["string", "null"]`, so an unspecified role is `null`, not simply
+    /// absent from the array.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_roles: Option<Vec<Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parents: Option<Vec<String>>,
     #[serde(flatten)]
@@ -271,6 +277,26 @@ mod tests {
             "an Extension-typed CityObject with an extra flattened member inside a \
              CityJSONFeature must round-trip byte-for-byte"
         );
+    }
+
+    /// § 2.5 CityObjectGroup: a group `CityObject` may carry a `children_roles`
+    /// member, one entry per id in `children`, describing that child's role
+    /// in the group. `cityobjects.schema.json`'s `CityObjectGroup` types each
+    /// item as `["string", "null"]`, so an unspecified role is `null`, not an
+    /// absent array entry -- this must round-trip too.
+    #[test]
+    fn city_object_group_children_roles_round_trips_including_null_entries() {
+        let input = serde_json::json!({
+            "type": "CityObjectGroup",
+            "children": ["building1", "building3"],
+            "children_roles": ["residential building", null]
+        });
+        let co: CityObject = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            co.children_roles,
+            Some(vec![Some("residential building".to_string()), None])
+        );
+        assert_eq!(serde_json::to_value(&co).unwrap(), input);
     }
 
     /// Every known CityObjectType name round-trips through its unit variant,
