@@ -46,15 +46,13 @@ fn same_number(a: &Number, b: &Number) -> bool {
 /// CityJSONSeq fixtures: line 1 is a `CityJSON` header, every subsequent
 /// line a `CityJSONFeature`.
 ///
-/// Deliberately excluded:
-/// - `duplicate_keys.city.jsonl` (in `tests/data/`, kept for reference but
-///   not round-tripped): its point is a JSON object with a repeated member
-///   name. No JSON parser preserves both -- `serde_json` keeps the last --
-///   so both sides of the comparison are already lossy before cjseq sees
-///   them. Failing here would say nothing about the type model.
-/// - `delft.city.jsonl` from flatcitybuf (6.6 MB): too heavy to commit for
-///   the coverage it adds over `small.city.jsonl`, which comes from the same
-///   3DBAG pipeline.
+/// Every fixture is round-tripped; nothing in `tests/data/` is excluded.
+/// (`EXCLUDED` below exists so that stays true by assertion rather than by
+/// good intentions -- see `every_fixture_on_disk_is_accounted_for`.)
+///
+/// `delft.city.jsonl` from flatcitybuf (6.6 MB) was not vendored at all: too
+/// heavy to commit for the coverage it adds over `small.city.jsonl`, which
+/// comes from the same 3DBAG pipeline.
 fn seq_fixtures() -> Vec<PathBuf> {
     [
         //-- Extension City Object and semantic-surface types, spelled with a
@@ -66,6 +64,13 @@ fn seq_fixtures() -> Vec<PathBuf> {
         "tests/data/empty_appearance.city.jsonl",
         "tests/data/small.city.jsonl",
         "tests/data/degenerate_extent.city.jsonl",
+        //-- despite the name, this file contains no repeated JSON member
+        //-- names at any depth (verified with an `object_pairs_hook` that
+        //-- reports them). It is five structurally identical Building
+        //-- features whose `grp` *attribute value* repeats -- a duplicate
+        //-- grouping case, not a duplicate-key case. It was briefly excluded
+        //-- on the strength of its filename; that was wrong.
+        "tests/data/duplicate_keys.city.jsonl",
         "tests/data/inferable_types.city.jsonl",
         "tests/data/long_strings.city.jsonl",
         "tests/data/single_feature.city.jsonl",
@@ -76,6 +81,12 @@ fn seq_fixtures() -> Vec<PathBuf> {
     .map(PathBuf::from)
     .collect()
 }
+
+/// Fixtures in `tests/data/` deliberately left out of the round trip, each
+/// with the reason it cannot be round-tripped. Empty, and it should stay that
+/// way: a fixture that cannot survive a round trip is a finding, not a
+/// housekeeping detail.
+const EXCLUDED: &[(&str, &str)] = &[];
 
 /// Whole-document CityJSON fixtures (not a sequence).
 fn cj_fixtures() -> Vec<PathBuf> {
@@ -148,8 +159,14 @@ fn canonical_numbers(v: &Value) -> Value {
                 let f = n.as_f64().expect("a JSON number is i64, u64, or f64");
                 //-- an f64 holding an exact integral value canonicalizes the
                 //-- same way an integer literal does, but only inside the
-                //-- range where the conversion is lossless
-                if f.fract() == 0.0 && f.abs() < 9.007e15 {
+                //-- range where the conversion is lossless. That range ends
+                //-- at 2^53, above which consecutive integers are no longer
+                //-- all representable -- so spell 2^53, not an approximation
+                //-- of it: a rounder constant slightly below it would make
+                //-- integral values in the gap canonicalize differently
+                //-- depending on whether they arrived float- or
+                //-- integer-spelled, i.e. report a difference that isn't one.
+                if f.fract() == 0.0 && f.abs() < 9007199254740992.0 {
                     (f as i64).to_string()
                 } else {
                     format!("{f:?}")
@@ -186,9 +203,12 @@ fn assert_equivalent(original: &Value, reserialized: &Value, what: &str) {
     if let Some(diff) = first_difference(original, reserialized, "") {
         panic!("{what} changed on round trip: {diff}");
     }
+    //-- `original` goes on the left so that assert_eq!'s "left"/"right"
+    //-- labels read the way the failure does: left is what the file said,
+    //-- right is what came back out.
     assert_eq!(
-        canonical_numbers(reserialized),
         canonical_numbers(original),
+        canonical_numbers(reserialized),
         "{what} changed on round trip"
     );
 }
@@ -227,6 +247,47 @@ fn every_cityjsonseq_fixture_roundtrips_exactly() {
 fn every_cityjson_fixture_roundtrips_exactly() {
     for path in cj_fixtures() {
         assert_roundtrips::<CityJSON>(&read(&path), &path.display().to_string());
+    }
+}
+
+/// The fixture lists above are hardcoded rather than globbed, deliberately: a
+/// glob silently passes when it matches nothing, so it cannot fail the way a
+/// missing fixture should. The cost of hardcoding is that a file can sit in
+/// `tests/data/` unexercised and nothing says so -- which is exactly what
+/// happened to `duplicate_keys.city.jsonl`, excluded on the strength of its
+/// filename and never rechecked. This closes that gap: every file on disk is
+/// either round-tripped or explicitly excluded with a reason.
+#[test]
+fn every_fixture_on_disk_is_accounted_for() {
+    let listed: std::collections::HashSet<PathBuf> = seq_fixtures()
+        .into_iter()
+        .chain(cj_fixtures())
+        .chain(EXCLUDED.iter().map(|(p, _)| PathBuf::from(*p)))
+        .collect();
+
+    let mut on_disk: Vec<PathBuf> = std::fs::read_dir("tests/data")
+        .expect("tests/data must exist (run from the crate root)")
+        .map(|e| e.expect("readable dir entry").path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl" || e == "json"))
+        .collect();
+    on_disk.sort();
+    assert!(!on_disk.is_empty(), "tests/data is empty");
+
+    let unaccounted: Vec<&PathBuf> = on_disk.iter().filter(|p| !listed.contains(*p)).collect();
+    assert!(
+        unaccounted.is_empty(),
+        "these fixtures are in tests/data/ but are neither round-tripped nor \
+         listed in EXCLUDED with a reason: {unaccounted:?}"
+    );
+
+    //-- and the reverse: a listed path that no longer exists must not pass
+    //-- silently either
+    for p in seq_fixtures().iter().chain(cj_fixtures().iter()) {
+        assert!(
+            p.exists(),
+            "{} is listed as a fixture but is missing",
+            p.display()
+        );
     }
 }
 
