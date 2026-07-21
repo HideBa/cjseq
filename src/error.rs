@@ -21,6 +21,13 @@ pub enum CjseqError {
         /// What was found instead, in words.
         found: String,
     },
+    /// An I/O operation failed, eg opening or reading a CityJSON(Seq) file.
+    Io(std::io::Error),
+    /// A document parsed as valid JSON, and every typed field on it parsed
+    /// fine, but it still fails a structural rule this crate enforces beyond
+    /// what serde alone can express -- eg its `type` is not `"CityJSON"`, or
+    /// its `version` is not one this crate supports.
+    Validation(String),
 }
 
 impl fmt::Display for CjseqError {
@@ -35,6 +42,8 @@ impl fmt::Display for CjseqError {
                 f,
                 "a {geometry_type:?} nests its boundaries {expected} levels deep, but {found}"
             ),
+            CjseqError::Io(e) => write!(f, "I/O error: {e}"),
+            CjseqError::Validation(msg) => write!(f, "invalid CityJSON: {msg}"),
         }
     }
 }
@@ -44,6 +53,8 @@ impl std::error::Error for CjseqError {
         match self {
             CjseqError::Json(e) => Some(e),
             CjseqError::GeometryDepth { .. } => None,
+            CjseqError::Io(e) => Some(e),
+            CjseqError::Validation(_) => None,
         }
     }
 }
@@ -54,5 +65,33 @@ impl From<serde_json::Error> for CjseqError {
     }
 }
 
+impl From<std::io::Error> for CjseqError {
+    fn from(e: std::io::Error) -> Self {
+        CjseqError::Io(e)
+    }
+}
+
 /// The crate's result type.
 pub type Result<T> = std::result::Result<T, CjseqError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn io_error_converts_via_from_and_keeps_its_message() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "nope");
+        let err: CjseqError = io_err.into();
+        assert!(matches!(err, CjseqError::Io(_)));
+        assert_eq!(err.to_string(), "I/O error: nope");
+    }
+
+    #[test]
+    fn validation_error_carries_its_message() {
+        let err = CjseqError::Validation("Input file not CityJSON.".to_string());
+        assert_eq!(
+            err.to_string(),
+            "invalid CityJSON: Input file not CityJSON."
+        );
+    }
+}

@@ -1,9 +1,10 @@
 use crate::appearance::Appearance;
 use crate::city_object::CityObject;
+use crate::error::Result;
 use crate::geometry::GeometryTemplates;
 use crate::metadata::{Metadata, Transform};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Error, Value};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -61,7 +62,7 @@ impl CityJSON {
         }
     }
     /// Create a new CityJSON instance from a string.
-    pub fn from_str(s: &str) -> Result<Self, Error> {
+    pub fn from_str(s: &str) -> Result<Self> {
         let mut cjj: CityJSON = serde_json::from_str(s)?;
         //-- check if CO exists, then add them to the sorted_ids
         for (key, co) in &cjj.city_objects {
@@ -485,8 +486,8 @@ impl CityJSONFeature {
             appearance: None,
         }
     }
-    pub fn from_str(s: &str) -> Result<Self, Error> {
-        let cjf: CityJSONFeature = serde_json::from_str(&s)?;
+    pub fn from_str(s: &str) -> Result<Self> {
+        let cjf: CityJSONFeature = serde_json::from_str(s)?;
         Ok(cjf)
     }
     pub fn add_co(&mut self, id: String, co: CityObject) {

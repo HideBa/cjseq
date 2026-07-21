@@ -1,3 +1,4 @@
+use crate::error::CjseqError;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_CRS_BASE_URL: &str = "https://www.opengis.net/def/crs";
@@ -88,9 +89,11 @@ impl ReferenceSystem {
     // OGC Name Type Specification:
     // http://www.opengis.net/def/crs/{authority}/{version}/{code}
     // where {authority} designates the authority responsible for the definition of this CRS (usually "EPSG" or "OGC"), and where {version} designates the specific version of the CRS ("0" (zero) is used if there is no version).
-    pub fn from_url(url: &str) -> Result<Self, &'static str> {
+    pub fn from_url(url: &str) -> crate::error::Result<Self> {
         if !url.contains("//www.opengis.net/def/crs") {
-            return Err("Invalid reference system URL");
+            return Err(CjseqError::Validation(
+                "invalid reference system URL".to_string(),
+            ));
         }
 
         let i = url.find("crs").unwrap();
@@ -98,7 +101,9 @@ impl ReferenceSystem {
 
         let parts: Vec<&str> = s.split("/").collect();
         if parts.len() != 3 {
-            return Err("Invalid reference system URL");
+            return Err(CjseqError::Validation(
+                "invalid reference system URL".to_string(),
+            ));
         }
 
         Ok(ReferenceSystem {
