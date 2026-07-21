@@ -165,12 +165,181 @@ pub struct TextureReference {
     pub other: HashMap<String, Value>,
 }
 
+/// A material or border colour: three numbers, per
+/// `appearance.schema.json`'s `"minItems": 3, "maxItems": 3` on
+/// `diffuseColor`, `emissiveColor` and `specularColor`.
+///
+/// A fixed-size array, not a `Vec`, so the cardinality is checked by serde's
+/// derived `Deserialize` rather than by a downstream `if len == 3`. The same
+/// technique already types `GeometryInstance::transformation_matrix` as
+/// `[f64; 16]`.
+pub type Color = [f64; 3];
+
+/// A texture's `borderColor`, whose schema is the one place a CityJSON colour
+/// is *not* fixed at three numbers:
+///
+/// ```text
+/// "borderColor": {
+///   "type": "array", "items": {"type": "number"},
+///   "minItems": 3, "maxItems": 4
+/// }
+/// ```
+///
+/// Three or four, and nothing else. A `Vec<f64>` would accept two or five and
+/// leave the check to a consumer that may not make it; the untagged pair of
+/// fixed-size arrays makes serde do it. Serialization is derived, and an
+/// untagged enum of arrays serializes as the array itself, so `[0, 0, 0, 1]`
+/// comes back spelled exactly as it went in.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum BorderColor {
+    /// `minItems: 3`
+    Rgb(Color),
+    /// `maxItems: 4`
+    Rgba([f64; 4]),
+}
+
+/// A texture image's file format: `"type": {"enum": ["PNG", "JPG"]}`.
+///
+/// Note the case: this member is spelled upper case where its `wrapMode` and
+/// `textureType` siblings are lower. Getting that wrong in a hand-written
+/// `match` is precisely the defect this type removes.
+///
+/// A closed enumeration in the schema -- unlike `CityObjectType` and
+/// `SemanticSurfaceType`, which carry an `Extension(String)` case because
+/// CityJSON Extensions may add to those two sets. Nothing in the spec lets an
+/// Extension add a texture format, so there is no such case here and an
+/// unrecognised spelling is an error.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextureFormat {
+    PNG,
+    JPG,
+}
+
+/// How a texture repeats outside `[0, 1]`:
+/// `"wrapMode": {"enum": ["none", "wrap", "mirror", "clamp", "border"]}`.
+///
+/// All five are lower case. A texture written `"wrapMode": "wrap"` once came
+/// back as `"None"` from FlatCityBuf because a downstream `match` expected a
+/// different spelling and its `_` arm turned the miss into a default; with the
+/// spellings here, the same mistake is a `serde` error at the boundary and a
+/// non-exhaustive `match` at every consumer.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum WrapMode {
+    None,
+    Wrap,
+    Mirror,
+    Clamp,
+    Border,
+}
+
+/// What a texture depicts:
+/// `"textureType": {"enum": ["unknown", "specific", "typical"]}`. Lower case,
+/// and a closed set.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureType {
+    Unknown,
+    Specific,
+    Typical,
+}
+
+/// One entry of the document-level `appearance.materials` palette, referred to
+/// by index from a [`MaterialReference`].
+///
+/// `appearance.schema.json#/Material`, in full:
+///
+/// ```text
+/// "Material": {
+///   "type": "object",
+///   "properties": {
+///     "name": {"type": "string"},
+///     "ambientIntensity": {"type": "number"},
+///     "diffuseColor":  {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+///     "emissiveColor": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+///     "specularColor": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+///     "shininess": {"type": "number"},
+///     "transparency": {"type": "number"},
+///     "isSmooth": {"type": "boolean"}
+///   },
+///   "required": ["name"],
+///   "additionalProperties": false
+/// }
+/// ```
+///
+/// So `name` is a plain `String` and everything else an `Option`, and there is
+/// no `#[serde(flatten)] other` catch-all: `additionalProperties: false` means
+/// an unnamed member is not CityJSON at all. `deny_unknown_fields` says so out
+/// loud rather than dropping it, which matters because dropping is silent data
+/// loss and, for the all-optional [`TextureObject`] below, an object of
+/// nothing but mis-spelled members would otherwise parse as an empty one.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialObject {
+    /// The schema's one required member.
+    pub name: String,
+    #[serde(rename = "ambientIntensity", skip_serializing_if = "Option::is_none")]
+    pub ambient_intensity: Option<f64>,
+    #[serde(rename = "diffuseColor", skip_serializing_if = "Option::is_none")]
+    pub diffuse_color: Option<Color>,
+    #[serde(rename = "emissiveColor", skip_serializing_if = "Option::is_none")]
+    pub emissive_color: Option<Color>,
+    #[serde(rename = "specularColor", skip_serializing_if = "Option::is_none")]
+    pub specular_color: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shininess: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<f64>,
+    #[serde(rename = "isSmooth", skip_serializing_if = "Option::is_none")]
+    pub is_smooth: Option<bool>,
+}
+
+/// One entry of the document-level `appearance.textures` palette, referred to
+/// by the first entry of each ring in a [`TextureValues`].
+///
+/// `appearance.schema.json#/Texture`, in full:
+///
+/// ```text
+/// "Texture": {
+///   "type": "object",
+///   "properties": {
+///     "type": {"enum": ["PNG", "JPG"]},
+///     "image": {"type": "string"},
+///     "wrapMode": {"enum": ["none", "wrap", "mirror", "clamp", "border"]},
+///     "textureType": {"enum": ["unknown", "specific", "typical"]},
+///     "borderColor": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 4}
+///   },
+///   "additionalProperties": false
+/// }
+/// ```
+///
+/// There is no `required` keyword, so *every* member is optional and a bare
+/// `{}` is valid CityJSON — including `image`, which FlatCityBuf's `.fbs`
+/// currently makes mandatory.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TextureObject {
+    /// The image file format. Named `thetype` because `type` is a Rust
+    /// keyword, as in [`crate::CityJSONFeature`].
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub thetype: Option<TextureFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(rename = "wrapMode", skip_serializing_if = "Option::is_none")]
+    pub wrap_mode: Option<WrapMode>,
+    #[serde(rename = "textureType", skip_serializing_if = "Option::is_none")]
+    pub texture_type: Option<TextureType>,
+    #[serde(rename = "borderColor", skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<BorderColor>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Appearance {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub materials: Option<Vec<Value>>,
+    pub materials: Option<Vec<MaterialObject>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub textures: Option<Vec<Value>>,
+    pub textures: Option<Vec<TextureObject>>,
     #[serde(rename = "vertices-texture")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vertices_texture: Option<Vec<Vec<f64>>>,
@@ -191,41 +360,25 @@ impl Appearance {
             default_theme_material: None,
         }
     }
-    pub(crate) fn add_material(&mut self, jm: Value) -> usize {
-        let re = match &mut self.materials {
-            Some(x) => match x.iter().position(|e| *e == jm) {
-                Some(y) => y,
-                None => {
-                    x.push(jm);
-                    x.len() - 1
-                }
-            },
+    pub(crate) fn add_material(&mut self, jm: MaterialObject) -> usize {
+        let ls = self.materials.get_or_insert_with(Vec::new);
+        match ls.iter().position(|e| *e == jm) {
+            Some(y) => y,
             None => {
-                let mut ls: Vec<Value> = Vec::new();
                 ls.push(jm);
-                self.materials = Some(ls);
-                0
+                ls.len() - 1
             }
-        };
-        re
+        }
     }
-    pub(crate) fn add_texture(&mut self, jm: Value) -> usize {
-        let re = match &mut self.textures {
-            Some(x) => match x.iter().position(|e| *e == jm) {
-                Some(y) => y,
-                None => {
-                    x.push(jm);
-                    x.len() - 1
-                }
-            },
+    pub(crate) fn add_texture(&mut self, jm: TextureObject) -> usize {
+        let ls = self.textures.get_or_insert_with(Vec::new);
+        match ls.iter().position(|e| *e == jm) {
+            Some(y) => y,
             None => {
-                let mut ls: Vec<Value> = Vec::new();
                 ls.push(jm);
-                self.textures = Some(ls);
-                0
+                ls.len() - 1
             }
-        };
-        re
+        }
     }
     pub(crate) fn add_vertices_texture(&mut self, mut vs: Vec<Vec<f64>>) {
         match &mut self.vertices_texture {
@@ -545,6 +698,231 @@ mod tests {
         //-- and a bare `{}` stays `{}` rather than gaining a null
         let empty: MaterialReference = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(serde_json::to_value(&empty).unwrap(), serde_json::json!({}));
+    }
+
+    //-------------------------------------------------------------------
+    //-- the document-level appearance *library*: `materials`/`textures`
+    //-------------------------------------------------------------------
+
+    /// The bug that motivated typing this library: a texture written
+    /// `"wrapMode": "wrap"` came back as `"None"`, because the consumer's
+    /// `match` expected a different spelling and its `_` arm coerced the
+    /// mis-spelling to a valid-looking default.
+    ///
+    /// `appearance.schema.json` fixes the five spellings exactly, all lower
+    /// case:
+    /// ```text
+    /// "wrapMode": { "enum": ["none", "wrap", "mirror", "clamp", "border"] }
+    /// ```
+    /// so every one of them must survive a round trip byte-identical, and
+    /// anything else -- including a differently-cased spelling of a real one
+    /// -- must be rejected here rather than defaulted downstream.
+    #[test]
+    fn every_wrap_mode_round_trips_and_nothing_else_is_accepted() {
+        for mode in ["none", "wrap", "mirror", "clamp", "border"] {
+            let input = serde_json::json!({"textures": [{"wrapMode": mode}]});
+            let a: Appearance = serde_json::from_value(input.clone())
+                .unwrap_or_else(|e| panic!("{mode} is a schema-valid wrapMode: {e}"));
+            assert_eq!(
+                serde_json::to_value(&a).unwrap(),
+                input,
+                "wrapMode {mode:?} must come back exactly as it went in"
+            );
+        }
+
+        for bad in ["Wrap", "WRAP", "None", "repeat", ""] {
+            assert!(
+                serde_json::from_value::<Appearance>(
+                    serde_json::json!({"textures": [{"wrapMode": bad}]})
+                )
+                .is_err(),
+                "{bad:?} is not one of the schema's five wrapMode spellings"
+            );
+        }
+    }
+
+    /// `"textureType": { "enum": ["unknown", "specific", "typical"] }` and
+    /// `"type": { "enum": ["PNG", "JPG"] }` -- note the case difference
+    /// between the two members, which is exactly the kind of detail a string
+    /// `match` gets wrong.
+    #[test]
+    fn every_texture_type_and_format_round_trips_and_nothing_else_is_accepted() {
+        for t in ["unknown", "specific", "typical"] {
+            let input = serde_json::json!({"textures": [{"textureType": t}]});
+            let a: Appearance = serde_json::from_value(input.clone())
+                .unwrap_or_else(|e| panic!("{t} is a schema-valid textureType: {e}"));
+            assert_eq!(serde_json::to_value(&a).unwrap(), input);
+        }
+        for bad in ["Unknown", "SPECIFIC", "other"] {
+            assert!(
+                serde_json::from_value::<Appearance>(
+                    serde_json::json!({"textures": [{"textureType": bad}]})
+                )
+                .is_err(),
+                "{bad:?} is not one of the schema's three textureType spellings"
+            );
+        }
+
+        for f in ["PNG", "JPG"] {
+            let input = serde_json::json!({"textures": [{"type": f}]});
+            let a: Appearance = serde_json::from_value(input.clone())
+                .unwrap_or_else(|e| panic!("{f} is a schema-valid texture type: {e}"));
+            assert_eq!(serde_json::to_value(&a).unwrap(), input);
+        }
+        //-- the schema spells these upper case, and lists only these two;
+        //-- `JPEG` and `jpg` are both outside it
+        for bad in ["png", "jpg", "JPEG", "TIFF"] {
+            assert!(
+                serde_json::from_value::<Appearance>(
+                    serde_json::json!({"textures": [{"type": bad}]})
+                )
+                .is_err(),
+                "{bad:?} is not one of the schema's two texture formats"
+            );
+        }
+    }
+
+    /// A texture object carries all five members, or none of them: the
+    /// `Texture` schema has no `required` keyword at all, so `{}` is valid,
+    /// and an absent member must not reappear.
+    #[test]
+    fn a_texture_object_keeps_every_member_it_was_given_and_invents_none() {
+        let full = serde_json::json!({"textures": [{
+            "type": "JPG",
+            "image": "appearances/wood.jpg",
+            "wrapMode": "wrap",
+            "textureType": "unknown",
+            "borderColor": [0.0, 0.0, 0.0, 1.0]
+        }]});
+        let a: Appearance = serde_json::from_value(full.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap(), full);
+
+        let bare = serde_json::json!({"textures": [{}]});
+        let a: Appearance = serde_json::from_value(bare.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&a).unwrap(),
+            bare,
+            "the Texture schema has no `required`, so an empty texture object \
+             is valid and must not gain members"
+        );
+    }
+
+    /// `"borderColor": {"type": "array", "items": {"type": "number"},
+    /// "minItems": 3, "maxItems": 4}` -- three *or* four, never two, never
+    /// five. This cardinality has already bitten this project once.
+    #[test]
+    fn border_color_is_three_or_four_numbers() {
+        for ok in [
+            serde_json::json!([0.0, 0.0, 0.0]),
+            serde_json::json!([0.0, 0.0, 0.0, 1.0]),
+        ] {
+            let input = serde_json::json!({"textures": [{"borderColor": ok}]});
+            let a: Appearance = serde_json::from_value(input.clone())
+                .unwrap_or_else(|e| panic!("{ok} is a schema-valid borderColor: {e}"));
+            assert_eq!(serde_json::to_value(&a).unwrap(), input);
+        }
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!([0.0]),
+            serde_json::json!([0.0, 0.0]),
+            serde_json::json!([0.0, 0.0, 0.0, 1.0, 1.0]),
+        ] {
+            assert!(
+                serde_json::from_value::<Appearance>(
+                    serde_json::json!({"textures": [{"borderColor": bad}]})
+                )
+                .is_err(),
+                "{bad} violates borderColor's minItems 3 / maxItems 4"
+            );
+        }
+    }
+
+    /// The `Material` schema is the mirror image of `Texture`: it *requires*
+    /// `name`, and pins each of its three colours at exactly three numbers
+    /// (`"minItems": 3, "maxItems": 3`).
+    #[test]
+    fn a_material_object_requires_a_name_and_three_number_colours() {
+        let full = serde_json::json!({"materials": [{
+            "name": "roof",
+            "ambientIntensity": 0.4,
+            "diffuseColor": [0.5, 0.4, 0.3],
+            "emissiveColor": [0.0, 0.0, 0.0],
+            "specularColor": [1.0, 1.0, 1.0],
+            "shininess": 0.2,
+            "transparency": 0.0,
+            "isSmooth": false
+        }]});
+        let a: Appearance = serde_json::from_value(full.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap(), full);
+
+        //-- `name` is the schema's one required member
+        assert!(
+            serde_json::from_value::<Appearance>(
+                serde_json::json!({"materials": [{"diffuseColor": [0.5, 0.4, 0.3]}]})
+            )
+            .is_err(),
+            "`name` is required by the Material schema"
+        );
+
+        //-- and a colour is exactly three numbers, never two, never four
+        for bad in [
+            serde_json::json!([0.5, 0.4]),
+            serde_json::json!([0.5, 0.4, 0.3, 0.2]),
+        ] {
+            assert!(
+                serde_json::from_value::<Appearance>(
+                    serde_json::json!({"materials": [{"name": "m", "diffuseColor": bad}]})
+                )
+                .is_err(),
+                "{bad} violates diffuseColor's minItems 3 / maxItems 3"
+            );
+        }
+
+        //-- only `name` need be there
+        let bare = serde_json::json!({"materials": [{"name": "m"}]});
+        let a: Appearance = serde_json::from_value(bare.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap(), bare);
+    }
+
+    /// Both `Material` and `Texture` declare `"additionalProperties": false`,
+    /// unlike the per-theme reference objects above. So an unnamed member is
+    /// *not* legal CityJSON, and quietly dropping it -- which is what a
+    /// catch-all-less struct does by default -- would let an invalid file
+    /// through and lose data on the way. Reject it instead.
+    #[test]
+    fn material_and_texture_objects_admit_no_members_the_schema_does_not_name() {
+        assert!(
+            serde_json::from_value::<Appearance>(
+                serde_json::json!({"materials": [{"name": "m", "vendorData": true}]})
+            )
+            .is_err(),
+            "the Material schema declares additionalProperties: false"
+        );
+        assert!(
+            serde_json::from_value::<Appearance>(
+                serde_json::json!({"textures": [{"image": "a.jpg", "vendorData": true}]})
+            )
+            .is_err(),
+            "the Texture schema declares additionalProperties: false"
+        );
+        //-- a near-miss spelling is an unnamed member, and so is caught by the
+        //-- same rule: this is the whole point of the exercise
+        assert!(
+            serde_json::from_value::<Appearance>(
+                serde_json::json!({"textures": [{"wrapmode": "wrap"}]})
+            )
+            .is_err(),
+            "`wrapmode` is not `wrapMode`"
+        );
+    }
+
+    /// An `appearance` with empty arrays in it is valid, and the arrays must
+    /// stay empty rather than becoming absent (`tests/data/empty_appearance`).
+    #[test]
+    fn an_empty_appearance_library_stays_empty() {
+        let input = serde_json::json!({"materials": [], "textures": []});
+        let a: Appearance = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap(), input);
     }
 
     /// Texture values are nested exactly as deeply as the boundaries of the

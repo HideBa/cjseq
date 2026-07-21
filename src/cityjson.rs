@@ -1,4 +1,4 @@
-use crate::appearance::Appearance;
+use crate::appearance::{Appearance, MaterialObject, TextureObject};
 use crate::city_object::CityObject;
 use crate::error::Result;
 use crate::geometry::GeometryTemplates;
@@ -6,6 +6,24 @@ use crate::metadata::{Metadata, Transform};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+
+/// Slice a document-level appearance palette down to the entries one feature
+/// uses, in the order that feature now refers to them.
+///
+/// `oldnew` maps each index used by the feature onto its dense position in the
+/// new palette; `update_material`/`update_texture` build it by handing out
+/// consecutive new indices, so its values are exactly `0..oldnew.len()` and
+/// sorting by them reproduces the palette.
+///
+/// This replaces a `resize(len, json!(null))`-then-overwrite loop, which only
+/// worked because every slot was subsequently overwritten: the `null` filler
+/// was never a valid palette entry, and now that the palette is typed it is
+/// not even representable.
+fn reindex<T: Clone>(all: &[T], oldnew: &HashMap<usize, usize>) -> Vec<T> {
+    let mut pairs: Vec<(usize, usize)> = oldnew.iter().map(|(o, n)| (*n, *o)).collect();
+    pairs.sort_unstable();
+    pairs.into_iter().map(|(_, old)| all[old].clone()).collect()
+}
 
 #[derive(Clone)]
 pub enum SortingStrategy {
@@ -137,32 +155,14 @@ impl CityJSON {
                     let mut acjf: Appearance = Appearance::new();
                     acjf.default_theme_material = a.default_theme_material.clone();
                     acjf.default_theme_texture = a.default_theme_texture.clone();
-                    if a.materials.is_some() {
-                        let am = a.materials.as_ref().unwrap();
-                        let mut mats2: Vec<Value> = Vec::new();
-                        mats2.resize(m_oldnew.len(), json!(null));
-                        for (old, new) in &m_oldnew {
-                            mats2[*new] = am[*old].clone();
-                        }
-                        acjf.materials = Some(mats2);
+                    if let Some(am) = a.materials.as_ref() {
+                        acjf.materials = Some(reindex(am, &m_oldnew));
                     }
-                    if a.textures.is_some() {
-                        let at = a.textures.as_ref().unwrap();
-                        let mut texs2: Vec<Value> = Vec::new();
-                        texs2.resize(t_oldnew.len(), json!(null));
-                        for (old, new) in &t_oldnew {
-                            texs2[*new] = at[*old].clone();
-                        }
-                        acjf.textures = Some(texs2);
+                    if let Some(at) = a.textures.as_ref() {
+                        acjf.textures = Some(reindex(at, &t_oldnew));
                     }
-                    if a.vertices_texture.is_some() {
-                        let atv = a.vertices_texture.as_ref().unwrap();
-                        let mut t_new_vertices: Vec<Vec<f64>> = Vec::new();
-                        t_new_vertices.resize(t_v_oldnew.len(), vec![]);
-                        for (old, new) in &t_v_oldnew {
-                            t_new_vertices[*new] = atv[*old].clone();
-                        }
-                        acjf.vertices_texture = Some(t_new_vertices);
+                    if let Some(atv) = a.vertices_texture.as_ref() {
+                        acjf.vertices_texture = Some(reindex(atv, &t_v_oldnew));
                     }
                     cj0.appearance = Some(acjf);
                 }
@@ -233,32 +233,14 @@ impl CityJSON {
             let mut acjf: Appearance = Appearance::new();
             acjf.default_theme_material = a.default_theme_material.clone();
             acjf.default_theme_texture = a.default_theme_texture.clone();
-            if a.materials.is_some() {
-                let am = a.materials.as_ref().unwrap();
-                let mut mats2: Vec<Value> = Vec::new();
-                mats2.resize(m_oldnew.len(), json!(null));
-                for (old, new) in &m_oldnew {
-                    mats2[*new] = am[*old].clone();
-                }
-                acjf.materials = Some(mats2);
+            if let Some(am) = a.materials.as_ref() {
+                acjf.materials = Some(reindex(am, &m_oldnew));
             }
-            if a.textures.is_some() {
-                let at = a.textures.as_ref().unwrap();
-                let mut texs2: Vec<Value> = Vec::new();
-                texs2.resize(t_oldnew.len(), json!(null));
-                for (old, new) in &t_oldnew {
-                    texs2[*new] = at[*old].clone();
-                }
-                acjf.textures = Some(texs2);
+            if let Some(at) = a.textures.as_ref() {
+                acjf.textures = Some(reindex(at, &t_oldnew));
             }
-            if a.vertices_texture.is_some() {
-                let atv = a.vertices_texture.as_ref().unwrap();
-                let mut t_new_vertices: Vec<Vec<f64>> = Vec::new();
-                t_new_vertices.resize(t_v_oldnew.len(), vec![]);
-                for (old, new) in &t_v_oldnew {
-                    t_new_vertices[*new] = atv[*old].clone();
-                }
-                acjf.vertices_texture = Some(t_new_vertices);
+            if let Some(atv) = a.vertices_texture.as_ref() {
+                acjf.vertices_texture = Some(reindex(atv, &t_v_oldnew));
             }
             cjf.appearance = Some(acjf);
         }
@@ -465,7 +447,7 @@ impl CityJSON {
             }
         };
     }
-    fn add_material(&mut self, jm: Value) -> usize {
+    fn add_material(&mut self, jm: MaterialObject) -> usize {
         let re = match &mut self.appearance {
             Some(x) => x.add_material(jm),
             None => {
@@ -477,7 +459,7 @@ impl CityJSON {
         };
         re
     }
-    fn add_texture(&mut self, jm: Value) -> usize {
+    fn add_texture(&mut self, jm: TextureObject) -> usize {
         let re = match &mut self.appearance {
             Some(x) => x.add_texture(jm),
             None => {
