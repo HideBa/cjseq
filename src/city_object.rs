@@ -176,6 +176,30 @@ pub struct CityObject {
 }
 
 impl CityObject {
+    /// A City Object of `thetype` carrying nothing else.
+    ///
+    /// `other` is deliberately not a constructor parameter: it is the
+    /// `#[serde(flatten)]` catch-all for members the schema does not name, and
+    /// a value built in code has none. Callers that need one set the named
+    /// fields directly, which are all `pub`.
+    ///
+    /// This exists because `other` is private, so a struct literal cannot be
+    /// written outside this module -- and every field but `thetype` has a
+    /// meaningful empty value, so a literal would be mostly `None` noise
+    /// anyway.
+    pub fn new(thetype: CityObjectType) -> Self {
+        CityObject {
+            thetype,
+            geographical_extent: None,
+            attributes: None,
+            geometry: None,
+            children: None,
+            children_roles: None,
+            parents: None,
+            other: Value::Null,
+        }
+    }
+
     pub fn get_type(&self) -> CityObjectType {
         self.thetype.clone()
     }
