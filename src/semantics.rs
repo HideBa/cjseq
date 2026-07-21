@@ -106,7 +106,7 @@ impl SemanticSurfaceType {
 
 /// One semantic surface: its type, its place in the parent/children hierarchy,
 /// and any further attributes the file chooses to carry.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SemanticsSurface {
     #[serde(rename = "type")]
     pub thetype: SemanticSurfaceType,
@@ -140,7 +140,7 @@ pub type SemanticsSolid = Vec<Option<SemanticsShell>>;
 /// The variants are ordered shallowest-first; serde tries them in declaration
 /// order, so a value only reaches a deeper variant when the shallower ones
 /// cannot describe it.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum SemanticsValues {
     /// `MultiSurface`, `CompositeSurface`: one index per surface.
@@ -159,7 +159,7 @@ pub enum SemanticsValues {
 /// it is an `Option` that is serialized even when `None` — writing it out as
 /// `null` rather than dropping the member, which would produce a document the
 /// schema rejects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Semantics {
     pub surfaces: Vec<SemanticsSurface>,
     pub values: Option<SemanticsValues>,
@@ -193,6 +193,21 @@ mod tests {
             serde_json::to_value(&s).unwrap()["values"],
             serde_json::json!([null, 0])
         );
+    }
+
+    /// develop's 6917631 added `Eq` (alongside `PartialEq`) to
+    /// `SemanticsSurface`/`Semantics`. `SemanticsSurface.other` is
+    /// `HashMap<String, serde_json::Value>`, and this serde_json version
+    /// (1.0.151) implements `Eq` for both `Number` (`impl Eq for N {}`,
+    /// `src/number.rs:50` -- sound because a JSON number can never be NaN)
+    /// and `Value` (`#[derive(Clone, Eq, PartialEq, Hash)]`,
+    /// `src/value/mod.rs:115`), so nothing here actually blocks `Eq`.
+    #[test]
+    fn semantics_surface_and_semantics_implement_eq() {
+        fn assert_impls_eq<T: Eq>() {}
+        assert_impls_eq::<SemanticsSurface>();
+        assert_impls_eq::<SemanticsValues>();
+        assert_impls_eq::<Semantics>();
     }
 
     /// A semantic surface may carry a hierarchy and arbitrary extra members;
