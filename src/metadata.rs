@@ -86,7 +86,18 @@ pub struct PointOfContact {
 /// - `{version}` designates the specific version of the CRS
 ///   (use "0" if there is no version)
 /// - `{code}` is the identifier for the specific coordinate reference system
-#[derive(Debug, Clone, PartialEq)]
+///
+/// In JSON this is a single string, not an object, so the derive needs
+/// telling how to get between the two. `#[serde(try_from/into)]` does exactly
+/// that and nothing else: `Serialize` and `Deserialize` stay **derived**, and
+/// the conversion is ordinary `TryFrom`/`From` code that serde calls on
+/// either side of a plain `String`. This replaces a hand-written `Serialize`
+/// and `Deserialize` pair, which violated the crate's derived-only rule --
+/// hand-written impls are the one place a field can be silently dropped or
+/// reshaped without any type-level trace, which is the whole reason for the
+/// rule.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(try_from = "String", into = "String")]
 pub struct ReferenceSystem {
     pub base_url: String,
     pub authority: String,
@@ -141,22 +152,19 @@ impl ReferenceSystem {
     }
 }
 
-impl Serialize for ReferenceSystem {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.to_url().serialize(serializer)
+/// The two conversions `#[serde(try_from = "String", into = "String")]` calls.
+/// They carry no serde logic of their own -- they are the same `to_url` and
+/// `from_url` the rest of the crate uses.
+impl From<ReferenceSystem> for String {
+    fn from(rs: ReferenceSystem) -> String {
+        rs.to_url()
     }
 }
 
-impl<'de> Deserialize<'de> for ReferenceSystem {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let url = String::deserialize(deserializer)?;
-        ReferenceSystem::from_url(&url).map_err(serde::de::Error::custom)
+impl TryFrom<String> for ReferenceSystem {
+    type Error = CjseqError;
+    fn try_from(url: String) -> crate::error::Result<Self> {
+        ReferenceSystem::from_url(&url)
     }
 }
 
@@ -270,8 +278,8 @@ mod tests {
             "contactType": "individual",
             "role": "pointOfContact"
         });
-        let poc: PointOfContact = serde_json::from_value(input.clone())
-            .expect("the spec's own example must parse");
+        let poc: PointOfContact =
+            serde_json::from_value(input.clone()).expect("the spec's own example must parse");
         assert_eq!(
             poc.address.as_ref().unwrap().members["thoroughfareNumber"],
             serde_json::json!("24")
@@ -334,6 +342,39 @@ mod tests {
         assert_eq!(a, b);
         let c = ReferenceSystem::from_url("https://www.opengis.net/def/crs/EPSG/0/4326").unwrap();
         assert_ne!(a, c);
+    }
+
+    /// `ReferenceSystem` is a struct in Rust and a bare string in JSON.
+    /// Swapping its hand-written `Serialize`/`Deserialize` for
+    /// `#[serde(try_from/into)]` must not change one byte of that: a derived
+    /// `Serialize` on a four-field struct would otherwise emit an *object*,
+    /// which is what this pins.
+    #[test]
+    fn reference_system_is_a_string_in_json_not_an_object() {
+        let url = "https://www.opengis.net/def/crs/EPSG/0/7415";
+        let rs: ReferenceSystem = serde_json::from_value(serde_json::json!(url)).unwrap();
+        assert_eq!(rs.authority, "EPSG");
+        assert_eq!(rs.version, "0");
+        assert_eq!(rs.code, "7415");
+        assert_eq!(serde_json::to_value(&rs).unwrap(), serde_json::json!(url));
+    }
+
+    /// And inside the metadata object it composes, which is the only place it
+    /// is ever actually serialized.
+    #[test]
+    fn reference_system_round_trips_inside_metadata() {
+        let input = serde_json::json!({
+            "referenceSystem": "https://www.opengis.net/def/crs/EPSG/0/7415"
+        });
+        let m: Metadata = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&m).unwrap(), input);
+    }
+
+    /// A string that is not a CRS URL is still an error rather than a silent
+    /// default -- the conversion is `TryFrom`, and serde surfaces its error.
+    #[test]
+    fn a_non_crs_reference_system_is_rejected() {
+        assert!(serde_json::from_value::<ReferenceSystem>(serde_json::json!("not-a-url")).is_err());
     }
 
     #[test]
