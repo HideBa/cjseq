@@ -156,7 +156,7 @@ impl Geometry {
                 return Err(CjseqError::GeometryDepth {
                     geometry_type: thetype,
                     expected,
-                    found: format!("these boundaries are nested {found} levels deep"),
+                    found,
                 });
             }
         }
@@ -366,7 +366,10 @@ mod tests {
                 serde_json::json!([[[0, 1, 2]]]),
             ),
             (GeometryType::Solid, serde_json::json!([[[[0, 1, 2]]]])),
-            (GeometryType::MultiSolid, serde_json::json!([[[[[0, 1, 2]]]]])),
+            (
+                GeometryType::MultiSolid,
+                serde_json::json!([[[[[0, 1, 2]]]]]),
+            ),
             (
                 GeometryType::CompositeSolid,
                 serde_json::json!([[[[[0, 1, 2]]]]]),
@@ -512,11 +515,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             values,
-            serde_json::json!([
-                [[0, 0, 1, 2, 100]],
-                [[0, 102, 101, 3, 102]],
-                [[null]]
-            ]),
+            serde_json::json!([[[0, 0, 1, 2, 100]], [[0, 102, 101, 3, 102]], [[null]]]),
             "texture values must renumber exactly as the old implementation did"
         );
 
@@ -586,9 +585,9 @@ mod tests {
             } => {
                 assert_eq!(*geometry_type, GeometryType::MultiSurface);
                 assert_eq!(*expected, 3, "a MultiSurface nests boundaries 3 deep");
-                assert!(
-                    found.contains('4'),
-                    "the message must say what depth was actually found, got {found:?}"
+                assert_eq!(
+                    *found, 4,
+                    "the depth actually found must be reported as a number, not prose"
                 );
             }
             other => panic!("expected a GeometryDepth error, got {other:?}"),

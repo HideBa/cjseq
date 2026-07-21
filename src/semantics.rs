@@ -43,6 +43,31 @@ pub enum KnownSemanticSurfaceType {
 /// for why a flat mix cannot round-trip (a unit variant under `untagged`
 /// (de)serializes as `null`, not its name; this was verified empirically
 /// while building `CityObjectType`, which has the identical shape).
+///
+/// # Match on the value, not on a reference
+///
+/// Each known name is also available flat, as an associated `const` (eg
+/// [`SemanticSurfaceType::RoofSurface`]) -- see the `impl` block below for
+/// the full list. They are `const`s, not variants, and that distinction bites
+/// exactly once, silently:
+///
+/// ```
+/// # use cjseq::SemanticSurfaceType;
+/// # let t = &SemanticSurfaceType::RoofSurface;
+/// match *t {
+///     SemanticSurfaceType::RoofSurface => { /* .. */ }
+///     SemanticSurfaceType::Extension(ref s) => { let _ = s; }
+///     _ => {}
+/// }
+/// ```
+///
+/// Note the `*`. `match t` where `t: &SemanticSurfaceType`, or `match &t`, is
+/// `E0308` ("mismatched types"), and rustc's fix-it suggests renaming the arm
+/// to a fresh binding -- which compiles, and silently turns that arm into a
+/// catch-all matching everything, because `RoofSurface` in pattern position
+/// reads as a new irrefutable binding rather than as the constant. The `_`
+/// arm is still required: `Known` and `Extension` are the real variants, so
+/// the known names alone are not exhaustive.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 #[serde(untagged)]
 pub enum SemanticSurfaceType {
@@ -55,15 +80,9 @@ pub enum SemanticSurfaceType {
 /// Flat, spec-spelling access to each known variant (eg
 /// `SemanticSurfaceType::RoofSurface`); see [`crate::CityObjectType`]'s
 /// equivalent block for why these are associated `const`s rather than enum
-/// variants.
-///
-/// Match on the value, not a reference: `match *t {
-/// SemanticSurfaceType::RoofSurface => .., SemanticSurfaceType::Extension(ref
-/// s) => .., _ => .. }`, not `match &t`/`match t` where `t:
-/// &SemanticSurfaceType`. Matching a `const` path against a reference is
-/// `E0308`, and rustc's fix-it suggestion (rename the arm to a binding)
-/// compiles into a silent catch-all instead of the intended check -- see
-/// [`crate::CityObjectType`]'s equivalent block for the full explanation.
+/// variants -- and, on
+/// [`SemanticSurfaceType`][SemanticSurfaceType#match-on-the-value-not-on-a-reference],
+/// for why they must be matched on a value rather than on a reference.
 #[allow(non_upper_case_globals)]
 impl SemanticSurfaceType {
     pub const RoofSurface: SemanticSurfaceType =
@@ -291,7 +310,8 @@ mod tests {
     /// variant its depth implies, not merely re-serialize to the same JSON.
     #[test]
     fn each_shape_lands_in_the_variant_its_depth_implies() {
-        let parse = |v: serde_json::Value| -> SemanticsValues { serde_json::from_value(v).unwrap() };
+        let parse =
+            |v: serde_json::Value| -> SemanticsValues { serde_json::from_value(v).unwrap() };
 
         assert!(matches!(
             parse(serde_json::json!([0, 1, null])),

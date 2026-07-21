@@ -1,9 +1,9 @@
+use cjseq::error::Result;
 use cjseq::CityJSON;
 use cjseq::CityJSONFeature;
 use cjseq::CityJSONType;
 use cjseq::CityObjectType;
 use cjseq::CjseqError;
-use cjseq::Result;
 use cjseq::Transform;
 
 extern crate clap;

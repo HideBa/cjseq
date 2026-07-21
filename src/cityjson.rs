@@ -437,7 +437,7 @@ impl CityJSON {
             }
         }
     }
-    fn add_vertices_texture(&mut self, vs: Vec<Vec<f64>>) {
+    fn add_vertices_texture(&mut self, vs: Vec<[f64; 2]>) {
         match &mut self.appearance {
             Some(x) => x.add_vertices_texture(vs),
             None => {

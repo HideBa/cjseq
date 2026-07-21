@@ -173,15 +173,23 @@ impl ReferenceSystem {
     /// friends) but does not enforce, so a longer or shorter path is carried
     /// through rather than rejected.
     pub fn from_url(url: &str) -> crate::error::Result<Self> {
-        //-- the schema's pattern is `^(http|https)://www.opengis.net/def/crs/`
-        const PREFIX: &str = "//www.opengis.net/def/crs/";
-        let Some(i) = url.find(PREFIX) else {
+        //-- the schema's pattern is `^(http|https)://www.opengis.net/def/crs/`,
+        //-- and the `^` is load-bearing: it anchors the scheme. Searching for
+        //-- the host anywhere in the string would accept `ftp://www.opengis
+        //-- .net/def/crs/x`, or any URL that merely embeds the host in a query
+        //-- string, neither of which the pattern matches. So: `starts_with`,
+        //-- once per permitted scheme.
+        const PREFIXES: [&str; 2] = [
+            "http://www.opengis.net/def/crs/",
+            "https://www.opengis.net/def/crs/",
+        ];
+        let Some(prefix) = PREFIXES.iter().find(|p| url.starts_with(**p)) else {
             return Err(CjseqError::Validation(format!(
                 "not a CRS URL: {url:?} does not match the required prefix \
                  (http|https)://www.opengis.net/def/crs/"
             )));
         };
-        let split = i + PREFIX.len();
+        let split = prefix.len();
         Ok(ReferenceSystem {
             //-- everything before the `/` that separates prefix from path
             base_url: url[..split - 1].to_string(),
@@ -460,6 +468,12 @@ mod tests {
             //-- the prefix pattern ends in a slash; `.../crs` alone lacks it
             "https://www.opengis.net/def/crs",
             "",
+            //-- the pattern is anchored, and names exactly two schemes. A
+            //-- substring search for the host would have let all three of
+            //-- these through with a nonsense `base_url`.
+            "ftp://www.opengis.net/def/crs/EPSG/0/7415",
+            "www.opengis.net/def/crs/EPSG/0/7415",
+            "https://example.com/?redirect=https://www.opengis.net/def/crs/EPSG/0/7415",
         ] {
             assert!(
                 ReferenceSystem::from_url(bad).is_err(),

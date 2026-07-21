@@ -351,9 +351,14 @@ pub struct Appearance {
     pub materials: Option<Vec<MaterialObject>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub textures: Option<Vec<TextureObject>>,
+    /// The (u, v) texture vertices. The schema pins each one to
+    /// `minItems: 2, maxItems: 2`, so it is `[f64; 2]` and not `Vec<f64>`:
+    /// a fixed-size array rejects a 1- or 3-element vertex on read and makes
+    /// one unwritable, exactly as `[f64; 3]` does for a colour and `[f64; 6]`
+    /// for a geographical extent.
     #[serde(rename = "vertices-texture")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vertices_texture: Option<Vec<Vec<f64>>>,
+    pub vertices_texture: Option<Vec<[f64; 2]>>,
     #[serde(rename = "default-theme-texture")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_theme_texture: Option<String>,
@@ -391,17 +396,10 @@ impl Appearance {
             }
         }
     }
-    pub(crate) fn add_vertices_texture(&mut self, mut vs: Vec<Vec<f64>>) {
-        match &mut self.vertices_texture {
-            Some(x) => {
-                x.append(&mut vs);
-            }
-            None => {
-                let mut ls: Vec<Vec<f64>> = Vec::new();
-                ls.append(&mut vs);
-                self.vertices_texture = Some(ls);
-            }
-        };
+    pub(crate) fn add_vertices_texture(&mut self, mut vs: Vec<[f64; 2]>) {
+        self.vertices_texture
+            .get_or_insert_with(Vec::new)
+            .append(&mut vs);
     }
 }
 
@@ -980,6 +978,35 @@ mod tests {
         });
         let a: Appearance = serde_json::from_value(all_five.clone()).unwrap();
         assert_eq!(serde_json::to_value(&a).unwrap(), all_five);
+    }
+
+    /// `cityjson.schema.json` pins each texture vertex to
+    /// `{"type": "array", "items": {"type": "number"}, "minItems": 2,
+    /// "maxItems": 2}`, so `vertices-texture` is `Vec<[f64; 2]>`: a vertex
+    /// with any other length is not CityJSON and must not parse, nor be
+    /// constructible in Rust. This is the same principle `Color` (`[f64; 3]`),
+    /// `GeographicalExtent` (`[f64; 6]`) and `transformationMatrix`
+    /// (`[f64; 16]`) already apply.
+    #[test]
+    fn a_texture_vertex_is_exactly_two_numbers() {
+        for bad in [
+            serde_json::json!({"vertices-texture": [[0.5]]}),
+            serde_json::json!({"vertices-texture": [[0.5, 0.5, 0.5]]}),
+            serde_json::json!({"vertices-texture": [[]]}),
+            //-- one good vertex is not enough to rescue a bad one
+            serde_json::json!({"vertices-texture": [[0.0, 0.0], [1.0, 1.0, 1.0]]}),
+        ] {
+            assert!(
+                serde_json::from_value::<Appearance>(bad.clone()).is_err(),
+                "{bad} has a texture vertex that is not exactly two numbers"
+            );
+        }
+
+        //-- the control, round-tripping through the fixed-size array
+        let good = serde_json::json!({"vertices-texture": [[0.0, 0.5], [1.0, 1.0]]});
+        let a: Appearance = serde_json::from_value(good.clone()).unwrap();
+        assert_eq!(a.vertices_texture, Some(vec![[0.0, 0.5], [1.0, 1.0]]));
+        assert_eq!(serde_json::to_value(&a).unwrap(), good);
     }
 
     /// An `appearance` with empty arrays in it is valid, and the arrays must

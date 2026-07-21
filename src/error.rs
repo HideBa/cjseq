@@ -18,8 +18,8 @@ pub enum CjseqError {
         geometry_type: GeometryType,
         /// The nesting depth the geometry type requires.
         expected: usize,
-        /// What was found instead, in words.
-        found: String,
+        /// The nesting depth the `boundaries` actually had.
+        found: usize,
     },
     /// An I/O operation failed, eg opening or reading a CityJSON(Seq) file.
     Io(std::io::Error),
@@ -40,7 +40,7 @@ impl fmt::Display for CjseqError {
                 found,
             } => write!(
                 f,
-                "a {geometry_type:?} nests its boundaries {expected} levels deep, but {found}"
+                "a {geometry_type:?} nests its boundaries {expected} levels deep, but these boundaries are nested {found} levels deep"
             ),
             CjseqError::Io(e) => write!(f, "I/O error: {e}"),
             CjseqError::Validation(msg) => write!(f, "invalid CityJSON: {msg}"),

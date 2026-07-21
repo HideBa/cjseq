@@ -65,6 +65,34 @@ pub enum KnownCityObjectType {
 /// unit-only enum sidesteps this, because *that* enum, derived without
 /// `#[serde(untagged)]`, gets the ordinary external-tagging collapse (a
 /// unit-only enum's tag+content is just the bare name string).
+///
+/// # Match on the value, not on a reference
+///
+/// Each known name is also available flat, as an associated `const` (eg
+/// [`CityObjectType::BuildingPart`]) -- see the `impl` block below for the
+/// full list. They are `const`s, not variants: this enum has exactly the two
+/// variants above. That distinction bites in exactly one place, and it bites
+/// silently, so it belongs here rather than in the small print:
+///
+/// ```
+/// # use cjseq::{CityObjectType, KnownCityObjectType};
+/// # let t = &CityObjectType::Building;
+/// match *t {
+///     CityObjectType::Building => { /* .. */ }
+///     CityObjectType::Extension(ref s) => { let _ = s; }
+///     _ => {}
+/// }
+/// ```
+///
+/// Note the `*`. Matching a `const` path against a `&CityObjectType` -- ie
+/// `match t` where `t: &CityObjectType`, or `match &t` -- is `E0308`
+/// ("mismatched types"), and rustc's fix-it suggests renaming the arm to a
+/// fresh binding. That *compiles*, and silently turns the arm into a
+/// catch-all that matches everything, because `Building` in pattern position
+/// reads as a new irrefutable binding rather than as the constant. The `_`
+/// arm is still required after `Extension(ref s)`: the match is not
+/// exhaustive over just the known names, since `Known` and `Extension` are
+/// the real variants.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 #[serde(untagged)]
 pub enum CityObjectType {
@@ -80,19 +108,10 @@ pub enum CityObjectType {
 /// These are associated `const`s, not enum variants -- `CityObjectType`
 /// itself has exactly the two variants above -- but a `const` path is usable
 /// wherever a variant path would be: in expressions (`x == CityObjectType::Bridge`)
-/// and, because the type derives `PartialEq`/`Eq`, in match patterns too.
-///
-/// Match on the value, not a reference: `match *t { CityObjectType::Building
-/// => .., CityObjectType::Extension(ref s) => .., _ => .. }`, not `match &t`
-/// or `match t` where `t: &CityObjectType`. Matching a `const` path against a
-/// `&CityObjectType` is `E0308` ("mismatched types"), and rustc's fix-it
-/// suggests renaming the arm to a fresh binding -- which compiles, but
-/// silently turns that arm into a catch-all that matches everything, since
-/// `CityObjectType::Building` (with binding-like syntax accepted) reads as a
-/// new irrefutable binding named `Building`, not the constant. `_` is still
-/// required after `Extension(ref s)` because these are two real variants
-/// (`Known`, `Extension`), so the match isn't exhaustive over just the known
-/// names.
+/// and, because the type derives `PartialEq`/`Eq`, in match patterns too --
+/// but only when matching on a *value*. See
+/// [`CityObjectType`][CityObjectType#match-on-the-value-not-on-a-reference]
+/// for why that matters and how it fails silently otherwise.
 #[allow(non_upper_case_globals)]
 impl CityObjectType {
     pub const Bridge: CityObjectType = CityObjectType::Known(KnownCityObjectType::Bridge);
@@ -171,8 +190,11 @@ pub struct CityObject {
     pub children_roles: Option<Vec<Option<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parents: Option<Vec<String>>,
+    /// Members the schema does not name, carried verbatim so they survive a
+    /// round trip. `pub`, like every other `#[serde(flatten)]` catch-all in
+    /// this crate, so a `CityObject` can be written as a struct literal.
     #[serde(flatten)]
-    other: serde_json::Value,
+    pub other: serde_json::Value,
 }
 
 impl CityObject {
@@ -183,10 +205,9 @@ impl CityObject {
     /// a value built in code has none. Callers that need one set the named
     /// fields directly, which are all `pub`.
     ///
-    /// This exists because `other` is private, so a struct literal cannot be
-    /// written outside this module -- and every field but `thetype` has a
-    /// meaningful empty value, so a literal would be mostly `None` noise
-    /// anyway.
+    /// This is a convenience, not a necessity: every field is `pub`, so a
+    /// struct literal works too. It saves writing seven `None`s and getting
+    /// the `other` sentinel right (see below).
     ///
     /// `other` is an empty *object*, not `Value::Null`: that is what
     /// deserializing a City Object with no unrecognized members produces, and
