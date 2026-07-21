@@ -217,6 +217,24 @@ mod tests {
         assert_eq!(serde_json::to_value(&s).unwrap(), input);
     }
 
+    /// develop's aff25a1 made `SemanticsSurface.other` an
+    /// `Option<serde_json::Value>` specifically so a surface with no extra
+    /// members serializes without an empty placeholder. Task 3 reaches the
+    /// same outcome a different way: `other` is a plain (non-`Option`)
+    /// `HashMap<String, Value>`, and `#[serde(flatten)]` on an empty map
+    /// contributes zero keys, so a surface with nothing extra round-trips
+    /// with no spurious members either way -- no `Option` wrapper needed.
+    #[test]
+    fn surface_with_no_extras_round_trips_without_spurious_members() {
+        let input = serde_json::json!({
+            "surfaces": [{"type": "RoofSurface"}],
+            "values": [0]
+        });
+        let s: Semantics = serde_json::from_value(input.clone()).unwrap();
+        assert!(s.surfaces[0].other.is_empty());
+        assert_eq!(serde_json::to_value(&s).unwrap(), input);
+    }
+
     /// The untagged variant order is load-bearing: each shape must land in the
     /// variant its depth implies, not merely re-serialize to the same JSON.
     #[test]
