@@ -87,6 +87,33 @@ pub struct PointOfContact {
 ///   (use "0" if there is no version)
 /// - `{code}` is the identifier for the specific coordinate reference system
 ///
+/// That three-element form is what OGC names and what every real file uses,
+/// but it is **not** what makes a `referenceSystem` legal. The normative
+/// constraint in `metadata.schema.json` is a prefix pattern and nothing else:
+///
+/// ```text
+/// "referenceSystem": {
+///   "type": "string",
+///   "pattern": "^(http|https)://www.opengis.net/def/crs/"
+/// }
+/// ```
+///
+/// So `.../crs/EPSG/0/4326/extra` and `.../crs/EPSG/0/7415/` are both legal
+/// CityJSON, and an earlier version of this type rejected them outright by
+/// demanding exactly three `/`-separated elements. That is the same
+/// rejects-legal defect as the old [`Address`], and the fix is the same:
+/// stop inventing structure the format does not mandate.
+///
+/// Hence `segments` rather than three named fields. It holds the path
+/// elements after `.../def/crs/` verbatim, so [`ReferenceSystem::to_url`] can
+/// rebuild *any* legal URL byte for byte -- including a trailing slash, which
+/// is simply a final empty element. The OGC reading is still available, as
+/// [`ReferenceSystem::authority`], [`ReferenceSystem::version`] and
+/// [`ReferenceSystem::code`], which return `None` when the URL does not have
+/// that shape. Keeping the three as plain fields *alongside* the verbatim
+/// path was the obvious alternative and is a trap: the two representations
+/// can disagree, and then `to_url` silently contradicts the fields.
+///
 /// In JSON this is a single string, not an object, so the derive needs
 /// telling how to get between the two. `#[serde(try_from/into)]` does exactly
 /// that and nothing else: `Serialize` and `Deserialize` stay **derived**, and
@@ -99,55 +126,66 @@ pub struct PointOfContact {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(try_from = "String", into = "String")]
 pub struct ReferenceSystem {
+    /// Everything up to and including `.../def/crs`, with no trailing slash.
     pub base_url: String,
-    pub authority: String,
-    pub version: String,
-    pub code: String,
+    /// The `/`-separated path elements after `.../def/crs/`, verbatim. OGC
+    /// names the first three `{authority}/{version}/{code}`; the schema
+    /// requires no particular number of them.
+    pub segments: Vec<String>,
 }
 
 impl ReferenceSystem {
+    /// The ordinary three-element OGC form.
     pub fn new(base_url: Option<String>, authority: String, version: String, code: String) -> Self {
-        let base_url = base_url.unwrap_or(DEFAULT_CRS_BASE_URL.to_string());
         ReferenceSystem {
-            base_url,
-            authority,
-            version,
-            code,
+            base_url: base_url.unwrap_or_else(|| DEFAULT_CRS_BASE_URL.to_string()),
+            segments: vec![authority, version, code],
         }
     }
 
+    /// The `{authority}` element, or `None` if this URL has no such element.
+    pub fn authority(&self) -> Option<&str> {
+        self.segments.first().map(String::as_str)
+    }
+
+    /// The `{version}` element (`"0"` when the CRS has no version).
+    pub fn version(&self) -> Option<&str> {
+        self.segments.get(1).map(String::as_str)
+    }
+
+    /// The `{code}` element identifying the CRS.
+    pub fn code(&self) -> Option<&str> {
+        self.segments.get(2).map(String::as_str)
+    }
+
+    /// Rebuild the URL. Exact for every input [`ReferenceSystem::from_url`]
+    /// accepts, whatever its element count -- `segments` is stored verbatim,
+    /// so there is nothing to reconstruct incorrectly.
     pub fn to_url(&self) -> String {
-        format!(
-            "{}/{}/{}/{}",
-            self.base_url, self.authority, self.version, self.code
-        )
+        format!("{}/{}", self.base_url, self.segments.join("/"))
     }
 
-    // OGC Name Type Specification:
-    // http://www.opengis.net/def/crs/{authority}/{version}/{code}
-    // where {authority} designates the authority responsible for the definition of this CRS (usually "EPSG" or "OGC"), and where {version} designates the specific version of the CRS ("0" (zero) is used if there is no version).
+    /// Parse a `referenceSystem` string.
+    ///
+    /// The only thing checked is the prefix, because the prefix is the only
+    /// thing `metadata.schema.json` constrains. The OGC three-element form is
+    /// a convention this honours (see [`ReferenceSystem::authority`] and
+    /// friends) but does not enforce, so a longer or shorter path is carried
+    /// through rather than rejected.
     pub fn from_url(url: &str) -> crate::error::Result<Self> {
-        if !url.contains("//www.opengis.net/def/crs") {
-            return Err(CjseqError::Validation(
-                "invalid reference system URL".to_string(),
-            ));
-        }
-
-        let i = url.find("crs").unwrap();
-        let s = &url[i + 4..];
-
-        let parts: Vec<&str> = s.split("/").collect();
-        if parts.len() != 3 {
-            return Err(CjseqError::Validation(
-                "invalid reference system URL".to_string(),
-            ));
-        }
-
+        //-- the schema's pattern is `^(http|https)://www.opengis.net/def/crs/`
+        const PREFIX: &str = "//www.opengis.net/def/crs/";
+        let Some(i) = url.find(PREFIX) else {
+            return Err(CjseqError::Validation(format!(
+                "not a CRS URL: {url:?} does not match the required prefix \
+                 (http|https)://www.opengis.net/def/crs/"
+            )));
+        };
+        let split = i + PREFIX.len();
         Ok(ReferenceSystem {
-            base_url: url[..i + 3].to_string(),
-            authority: parts[0].to_string(),
-            version: parts[1].to_string(),
-            code: parts[2].to_string(),
+            //-- everything before the `/` that separates prefix from path
+            base_url: url[..split - 1].to_string(),
+            segments: url[split..].split('/').map(str::to_string).collect(),
         })
     }
 }
@@ -353,10 +391,81 @@ mod tests {
     fn reference_system_is_a_string_in_json_not_an_object() {
         let url = "https://www.opengis.net/def/crs/EPSG/0/7415";
         let rs: ReferenceSystem = serde_json::from_value(serde_json::json!(url)).unwrap();
-        assert_eq!(rs.authority, "EPSG");
-        assert_eq!(rs.version, "0");
-        assert_eq!(rs.code, "7415");
+        assert_eq!(rs.authority(), Some("EPSG"));
+        assert_eq!(rs.version(), Some("0"));
+        assert_eq!(rs.code(), Some("7415"));
         assert_eq!(serde_json::to_value(&rs).unwrap(), serde_json::json!(url));
+    }
+
+    /// `metadata.schema.json` constrains `referenceSystem` by a *prefix
+    /// pattern* and nothing else, so a path with more or fewer than three
+    /// elements is legal CityJSON. cjseq demanded exactly three and rejected
+    /// the rest outright -- the same rejects-legal defect as the old
+    /// `Address`, and caught by the same review (codex finding A2, whose
+    /// `.../EPSG/0/4326/extra` example is the first case below).
+    ///
+    /// Each must survive byte for byte: `to_url` rebuilds from the verbatim
+    /// path, so a trailing slash (a final empty element) comes back too.
+    #[test]
+    fn any_url_matching_the_schemas_prefix_pattern_is_accepted_and_round_trips() {
+        for url in [
+            //-- codex's own example
+            "https://www.opengis.net/def/crs/EPSG/0/4326/extra",
+            //-- a trailing slash: a fourth, empty element
+            "https://www.opengis.net/def/crs/EPSG/0/7415/",
+            //-- fewer elements than OGC names
+            "https://www.opengis.net/def/crs/EPSG/0",
+            "https://www.opengis.net/def/crs/EPSG",
+            //-- the degenerate case the pattern still matches
+            "https://www.opengis.net/def/crs/",
+            //-- the pattern permits plain http too
+            "http://www.opengis.net/def/crs/EPSG/0/7415",
+            //-- and the ordinary form must be unaffected
+            "https://www.opengis.net/def/crs/EPSG/0/7415",
+        ] {
+            let rs = ReferenceSystem::from_url(url)
+                .unwrap_or_else(|e| panic!("{url} matches the schema pattern: {e}"));
+            assert_eq!(rs.to_url(), url, "{url} must round-trip byte for byte");
+            //-- and through serde, which is how it is actually used
+            let via_serde: ReferenceSystem =
+                serde_json::from_value(serde_json::json!(url)).unwrap();
+            assert_eq!(
+                serde_json::to_value(&via_serde).unwrap(),
+                serde_json::json!(url)
+            );
+        }
+    }
+
+    /// The OGC accessors report absence rather than inventing an element.
+    #[test]
+    fn the_ogc_accessors_are_optional() {
+        let short = ReferenceSystem::from_url("https://www.opengis.net/def/crs/EPSG").unwrap();
+        assert_eq!(short.authority(), Some("EPSG"));
+        assert_eq!(short.version(), None);
+        assert_eq!(short.code(), None);
+
+        let long =
+            ReferenceSystem::from_url("https://www.opengis.net/def/crs/EPSG/0/4326/extra").unwrap();
+        assert_eq!(long.code(), Some("4326"));
+        assert_eq!(long.segments.len(), 4);
+    }
+
+    /// Relaxing the path must not relax the prefix: the pattern is the one
+    /// thing the schema does constrain.
+    #[test]
+    fn a_url_failing_the_prefix_pattern_is_still_rejected() {
+        for bad in [
+            "https://example.com/def/crs/EPSG/0/7415",
+            "https://www.opengis.net/def/EPSG/0/7415",
+            //-- the prefix pattern ends in a slash; `.../crs` alone lacks it
+            "https://www.opengis.net/def/crs",
+            "",
+        ] {
+            assert!(
+                ReferenceSystem::from_url(bad).is_err(),
+                "{bad:?} does not match the schema pattern and must be rejected"
+            );
+        }
     }
 
     /// And inside the metadata object it composes, which is the only place it
