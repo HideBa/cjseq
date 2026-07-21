@@ -21,18 +21,33 @@ impl Transform {
 
 pub type GeographicalExtent = [f64; 6];
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// The `address` member of a [`PointOfContact`] (§ 5.3 pointOfContact).
+///
+/// Deliberately free-form, and that is what the normative schema asks for:
+/// `metadata.schema.json` types `address` as a bare `{"type": "object"}` --
+/// no `properties`, no `required`, no `additionalProperties`. The prose says
+/// why in as many words: "any properties can be used, to accommodate the
+/// different ways addresses are structured in different countries" (§ 5.3).
+///
+/// This type used to declare five *required* members (`thoroughfareNumber`
+/// typed `i64`, `thoroughfareName`, `locality`, `postalCode`, `country`) and
+/// so rejected nearly every legal address -- including both of the spec's own
+/// examples, which spell the number as a *string* (`"134"`, `"24"`) and the
+/// postcode as `postcode`, not `postalCode`. Structure the model does not
+/// actually know is worse than no structure: it turns valid input into a
+/// parse error.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Address {
-    #[serde(rename = "thoroughfareNumber")]
-    pub thoroughfare_number: i64,
-    #[serde(rename = "thoroughfareName")]
-    pub thoroughfare_name: String,
-    pub locality: String,
-    #[serde(rename = "postalCode")]
-    pub postal_code: String,
-    pub country: String,
+    #[serde(flatten)]
+    pub members: HashMap<String, Value>,
 }
 
+/// The `pointOfContact` member of [`Metadata`] (§ 5.3).
+///
+/// `contactName` and `emailAddress` are the schema's only two `required`
+/// members; everything else is optional. As with [`Metadata`], the schema's
+/// `contactDetails` definition declares no `additionalProperties: false`, so
+/// `other` keeps anything further rather than dropping it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PointOfContact {
     #[serde(rename = "contactName")]
@@ -49,8 +64,17 @@ pub struct PointOfContact {
     pub email_address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub website: Option<String>,
+    /// The name of the organisation, "to be used if the `contactName` is the
+    /// name of a person" (§ 5.3). Named by both the prose and the schema's
+    /// `contactDetails.properties`; it had no field here at all, so it was
+    /// silently dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<Address>,
+    /// Every contact member the schema does not name, kept verbatim.
+    #[serde(flatten)]
+    pub other: HashMap<String, Value>,
 }
 
 /// A reference system following the OGC Name Type Specification.
@@ -194,15 +218,17 @@ mod tests {
 
     #[test]
     fn address_with_equal_fields_is_equal() {
-        let a = Address {
-            thoroughfare_number: 1,
-            thoroughfare_name: "rue de la Patate".to_string(),
-            locality: "Chibougamau".to_string(),
-            postal_code: "H0H 0H0".to_string(),
-            country: "Canada".to_string(),
-        };
+        let a: Address = serde_json::from_value(serde_json::json!({
+            "thoroughfareNumber": 1,
+            "thoroughfareName": "rue de la Patate",
+            "locality": "Chibougamau",
+            "postalCode": "H0H 0H0",
+            "country": "Canada"
+        }))
+        .unwrap();
         let b = a.clone();
         assert_eq!(a, b);
+        assert_ne!(a, Address::default());
     }
 
     #[test]
@@ -214,10 +240,91 @@ mod tests {
             phone: None,
             email_address: "jane@example.com".to_string(),
             website: None,
+            organization: None,
             address: None,
+            other: HashMap::new(),
         };
         let b = a.clone();
         assert_eq!(a, b);
+    }
+
+    /// The `pointOfContact` example in § 5.3 of the spec, verbatim. cjseq
+    /// rejected it outright -- `"thoroughfareNumber": "24"` is a string and
+    /// `Address.thoroughfare_number` was an `i64` -- which is the plainest
+    /// possible demonstration that the old `Address` invented structure the
+    /// spec does not have. `metadata.schema.json` types `address` as bare
+    /// `{"type": "object"}`.
+    #[test]
+    fn the_specs_own_point_of_contact_example_parses_and_round_trips() {
+        let input = serde_json::json!({
+            "contactName": "Justin Trudeau",
+            "emailAddress": "justin.trudeau@parl.gc.ca",
+            "phone": "+1-613-992-4211",
+            "address": {
+                "thoroughfareNumber": "24",
+                "thoroughfareName": "Sussez Drive",
+                "postcode": "H0H 0H0",
+                "locality": "Ottawa",
+                "country": "Canada"
+            },
+            "contactType": "individual",
+            "role": "pointOfContact"
+        });
+        let poc: PointOfContact = serde_json::from_value(input.clone())
+            .expect("the spec's own example must parse");
+        assert_eq!(
+            poc.address.as_ref().unwrap().members["thoroughfareNumber"],
+            serde_json::json!("24")
+        );
+        assert_eq!(serde_json::to_value(&poc).unwrap(), input);
+    }
+
+    /// The § 5 metadata example spells the number as a string too, and uses
+    /// `postcode`. Both spellings must survive; neither is normalized.
+    #[test]
+    fn an_address_keeps_whatever_members_it_was_given() {
+        for input in [
+            serde_json::json!({"thoroughfareNumber": "134", "postcode": "2628BL"}),
+            serde_json::json!({"thoroughfareNumber": 134, "postalCode": "2628BL"}),
+            //-- a shape from neither example: the schema forbids nothing
+            serde_json::json!({"freeform": {"nested": [1, 2]}}),
+            serde_json::json!({}),
+        ] {
+            let a: Address = serde_json::from_value(input.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&a).unwrap(), input);
+        }
+    }
+
+    /// `organization` is named by both § 5.3 and the schema's
+    /// `contactDetails.properties`, and had no field here, so it vanished.
+    #[test]
+    fn point_of_contact_keeps_organization_and_unnamed_members() {
+        let input = serde_json::json!({
+            "contactName": "Jane Doe",
+            "emailAddress": "jane@example.com",
+            "organization": "3D geoinformation group, TU Delft",
+            "somethingElse": 42
+        });
+        let poc: PointOfContact = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            poc.organization.as_deref(),
+            Some("3D geoinformation group, TU Delft")
+        );
+        assert_eq!(serde_json::to_value(&poc).unwrap(), input);
+    }
+
+    /// The two members the schema marks `required` are still required: this
+    /// change relaxes `address`, not the contact itself.
+    #[test]
+    fn point_of_contact_still_requires_the_two_members_the_schema_requires() {
+        assert!(serde_json::from_value::<PointOfContact>(
+            serde_json::json!({"emailAddress": "a@b.c"})
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<PointOfContact>(serde_json::json!({"contactName": "A"}))
+                .is_err()
+        );
     }
 
     #[test]
