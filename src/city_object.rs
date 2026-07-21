@@ -1,4 +1,5 @@
 use crate::geometry::Geometry;
+use crate::metadata::GeographicalExtent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -155,7 +156,7 @@ pub struct CityObject {
     pub thetype: CityObjectType,
     #[serde(rename = "geographicalExtent")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub geographical_extent: Option<Vec<f64>>,
+    pub geographical_extent: Option<GeographicalExtent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -277,6 +278,33 @@ mod tests {
             "an Extension-typed CityObject with an extra flattened member inside a \
              CityJSONFeature must round-trip byte-for-byte"
         );
+    }
+
+    /// `cityobjects.schema.json`'s `_AbstractCityObject.geographicalExtent`
+    /// has `minItems`/`maxItems` 6 -- a fixed-length array, not an arbitrary
+    /// `Vec<f64>` -- so a 5- or 7-element extent must fail to deserialize
+    /// rather than being silently accepted.
+    #[test]
+    fn city_object_geographical_extent_rejects_the_wrong_length() {
+        let too_short = serde_json::json!({
+            "type": "Building",
+            "geographicalExtent": [0.0, 0.0, 0.0, 1.0, 1.0]
+        });
+        assert!(serde_json::from_value::<CityObject>(too_short).is_err());
+    }
+
+    #[test]
+    fn city_object_geographical_extent_round_trips_as_a_six_element_array() {
+        let input = serde_json::json!({
+            "type": "Building",
+            "geographicalExtent": [84710.1, 446846.0, -5.3, 84757.1, 446944.0, 40.9]
+        });
+        let co: CityObject = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            co.geographical_extent,
+            Some([84710.1, 446846.0, -5.3, 84757.1, 446944.0, 40.9])
+        );
+        assert_eq!(serde_json::to_value(&co).unwrap(), input);
     }
 
     /// § 2.5 CityObjectGroup: a group `CityObject` may carry a `children_roles`
