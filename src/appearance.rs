@@ -334,7 +334,18 @@ pub struct TextureObject {
     pub border_color: Option<BorderColor>,
 }
 
+/// The document-level appearance library.
+///
+/// `cityjson.schema.json#/properties/appearance` names five members and then
+/// declares `"additionalProperties": false`, exactly as the [`MaterialObject`]
+/// and [`TextureObject`] it contains do —
+/// `cityjsonfeature.schema.json#/properties/appearance` carries the same
+/// clause verbatim, so the rule holds at both document levels. Hence
+/// `deny_unknown_fields` here too: an extra member is not CityJSON, and
+/// dropping it silently at this level while rejecting it one level down would
+/// be inconsistent as well as lossy.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Appearance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub materials: Option<Vec<MaterialObject>>,
@@ -914,6 +925,61 @@ mod tests {
             .is_err(),
             "`wrapmode` is not `wrapMode`"
         );
+    }
+
+    /// The `appearance` object itself declares `additionalProperties: false`,
+    /// exactly as the `Material` and `Texture` objects inside it do.
+    /// `cityjson.schema.json#/properties/appearance`:
+    ///
+    /// ```text
+    /// "appearance": {
+    ///   "type": "object",
+    ///   "properties": {
+    ///     "default-theme-texture": {"type": "string"},
+    ///     "default-theme-material": {"type": "string"},
+    ///     "materials": {"type": "array", "items": {"$ref": "appearance.schema.json#/Material"}},
+    ///     "textures":  {"type": "array", "items": {"$ref": "appearance.schema.json#/Texture"}},
+    ///     "vertices-texture": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}}
+    ///   },
+    ///   "additionalProperties": false
+    /// }
+    /// ```
+    ///
+    /// `cityjsonfeature.schema.json#/properties/appearance` carries the same
+    /// clause verbatim, so the rule holds at both document levels. Dropping an
+    /// extra member here while rejecting one a level down, inside `Material`,
+    /// would be asymmetric: the schema forbids the member either way.
+    #[test]
+    fn the_appearance_object_admits_no_members_the_schema_does_not_name() {
+        for bad in [
+            serde_json::json!({"vendorData": true}),
+            //-- a near-miss on each of the two hyphenated names, which are the
+            //-- easiest of the five to mistype
+            serde_json::json!({"default_theme_texture": "winter"}),
+            serde_json::json!({"vertices_texture": [[0.0, 0.0]]}),
+            //-- and a near-miss alongside a member that is correct, so the
+            //-- rejection cannot be an accident of the object being otherwise
+            //-- empty
+            serde_json::json!({"materials": [], "texture": []}),
+        ] {
+            assert!(
+                serde_json::from_value::<Appearance>(bad.clone()).is_err(),
+                "{bad} carries a member `appearance` does not name, and the \
+                 schema declares additionalProperties: false"
+            );
+        }
+
+        //-- the control: all five named members together are accepted, so the
+        //-- loop above is not passing merely because everything is rejected
+        let all_five = serde_json::json!({
+            "materials": [{"name": "m"}],
+            "textures": [{"image": "a.jpg"}],
+            "vertices-texture": [[0.0, 0.0]],
+            "default-theme-texture": "winter",
+            "default-theme-material": "irradiation"
+        });
+        let a: Appearance = serde_json::from_value(all_five.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap(), all_five);
     }
 
     /// An `appearance` with empty arrays in it is valid, and the arrays must
