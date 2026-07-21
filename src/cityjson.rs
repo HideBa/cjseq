@@ -15,7 +15,7 @@ pub enum SortingStrategy {
     Hilbert, //-- TODO implement Hilbert sorting
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CityJSON {
     #[serde(rename = "type")]
     pub thetype: CityJSONType,
@@ -40,6 +40,34 @@ pub struct CityJSON {
     #[serde(skip)]
     transform_correction: Option<Transform>,
 }
+
+/// Hand-written rather than derived: `sorted_ids` and `transform_correction`
+/// are `#[serde(skip)]` internal bookkeeping, not part of the CityJSON
+/// document. `sorted_ids` in particular is populated by iterating
+/// `city_objects` (a `HashMap`, whose iteration order is not guaranteed
+/// stable across independently-constructed maps) and can be further
+/// reordered by `sort_cjfeatures(SortingStrategy::Random)`, so a derived
+/// `PartialEq` that included it would make `==` spuriously `false` for two
+/// values representing the identical document. Excluding it here is what
+/// makes equality mean "same document", which is the only sense of equality
+/// this crate (or its callers) should ever want. This does not violate the
+/// "never hand-write" constraint, which is about `Serialize`/`Deserialize`
+/// -- a hand-written `PartialEq` cannot corrupt output.
+impl PartialEq for CityJSON {
+    fn eq(&self, other: &Self) -> bool {
+        self.thetype == other.thetype
+            && self.version == other.version
+            && self.transform == other.transform
+            && self.city_objects == other.city_objects
+            && self.vertices == other.vertices
+            && self.metadata == other.metadata
+            && self.appearance == other.appearance
+            && self.geometry_templates == other.geometry_templates
+            && self.extensions == other.extensions
+            && self.other == other.other
+    }
+}
+
 impl CityJSON {
     /// Create a new CityJSON instance with default values.
     pub fn new() -> Self {
@@ -570,6 +598,41 @@ mod tests {
         let mut c = CityJSON::new();
         c.version = "1.1".to_string();
         assert_ne!(a, c);
+    }
+
+    /// `sorted_ids` and `transform_correction` are `#[serde(skip)]` internal
+    /// bookkeeping, not part of the document: `sorted_ids` is populated by
+    /// `from_str` iterating `city_objects` (a `HashMap`, whose iteration
+    /// order is not guaranteed stable across independently-constructed
+    /// maps), and `sort_cjfeatures(Random)` shuffles it further. Two
+    /// `CityJSON`s parsed from the identical string represent the identical
+    /// document and must compare equal regardless of what order that
+    /// bookkeeping happened to land in. A fixture with a single top-level
+    /// CityObject cannot exercise this -- `sorted_ids` would trivially have
+    /// one, unambiguous order either way -- so this uses five.
+    #[test]
+    fn cityjson_parsed_twice_from_the_same_string_is_equal_regardless_of_hashmap_order() {
+        let input = serde_json::json!({
+            "type": "CityJSON",
+            "version": "2.0",
+            "transform": {"scale": [1.0, 1.0, 1.0], "translate": [0.0, 0.0, 0.0]},
+            "CityObjects": {
+                "id-a": {"type": "Building"},
+                "id-b": {"type": "Building"},
+                "id-c": {"type": "Building"},
+                "id-d": {"type": "Building"},
+                "id-e": {"type": "Building"}
+            },
+            "vertices": []
+        })
+        .to_string();
+        let a = CityJSON::from_str(&input).unwrap();
+        let b = CityJSON::from_str(&input).unwrap();
+        assert_eq!(
+            a, b,
+            "the same document parsed twice must be equal, independent of internal \
+             bookkeeping order"
+        );
     }
 
     #[test]

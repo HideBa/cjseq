@@ -304,6 +304,12 @@ mod tests {
             "geographicalExtent": [0.0, 0.0, 0.0, 1.0, 1.0]
         });
         assert!(serde_json::from_value::<CityObject>(too_short).is_err());
+
+        let too_long = serde_json::json!({
+            "type": "Building",
+            "geographicalExtent": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0]
+        });
+        assert!(serde_json::from_value::<CityObject>(too_long).is_err());
     }
 
     #[test]
