@@ -187,6 +187,13 @@ impl CityObject {
     /// written outside this module -- and every field but `thetype` has a
     /// meaningful empty value, so a literal would be mostly `None` noise
     /// anyway.
+    ///
+    /// `other` is an empty *object*, not `Value::Null`: that is what
+    /// deserializing a City Object with no unrecognized members produces, and
+    /// the derived `PartialEq` compares it. A `Null` here would serialize
+    /// identically but make every constructed object compare unequal to its
+    /// parsed twin -- silently, and only ever noticed by a test that compares
+    /// whole objects.
     pub fn new(thetype: CityObjectType) -> Self {
         CityObject {
             thetype,
@@ -196,7 +203,7 @@ impl CityObject {
             children: None,
             children_roles: None,
             parents: None,
-            other: Value::Null,
+            other: Value::Object(serde_json::Map::new()),
         }
     }
 
@@ -232,6 +239,29 @@ impl CityObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A constructed City Object must equal the one deserializing the
+    /// equivalent minimal JSON produces. Serializing both and comparing the
+    /// output is not enough: `other: Value::Null` and `other: Value::Object({})`
+    /// both serialize to nothing, so only `==` distinguishes them -- and `==`
+    /// is what a caller round-tripping a document through its own encoder will
+    /// reach for.
+    #[test]
+    fn a_constructed_city_object_equals_its_parsed_twin() {
+        let constructed = CityObject::new(CityObjectType::Building);
+        let parsed: CityObject = serde_json::from_str(r#"{"type":"Building"}"#).unwrap();
+        assert_eq!(constructed, parsed);
+        assert_eq!(
+            serde_json::to_value(&constructed).unwrap(),
+            serde_json::json!({"type": "Building"})
+        );
+
+        // And the same for an Extension type, whose name lives in the tag
+        // rather than in `other`.
+        let constructed = CityObject::new(CityObjectType::Extension("+Noise".into()));
+        let parsed: CityObject = serde_json::from_str(r#"{"type":"+Noise"}"#).unwrap();
+        assert_eq!(constructed, parsed);
+    }
 
     #[test]
     fn extension_city_object_type_roundtrips_with_its_plus() {
