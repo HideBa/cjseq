@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_CRS_BASE_URL: &str = "https://www.opengis.net/def/crs";
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Transform {
     pub scale: Vec<f64>,
     pub translate: Vec<f64>,
@@ -19,7 +19,7 @@ impl Transform {
 
 pub type GeographicalExtent = [f64; 6];
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Address {
     #[serde(rename = "thoroughfareNumber")]
     pub thoroughfare_number: i64,
@@ -31,7 +31,7 @@ pub struct Address {
     pub country: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PointOfContact {
     #[serde(rename = "contactName")]
     pub contact_name: String,
@@ -60,7 +60,7 @@ pub struct PointOfContact {
 /// - `{version}` designates the specific version of the CRS
 ///   (use "0" if there is no version)
 /// - `{code}` is the identifier for the specific coordinate reference system
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceSystem {
     pub base_url: String,
     pub authority: String,
@@ -134,7 +134,7 @@ impl<'de> Deserialize<'de> for ReferenceSystem {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Metadata {
     #[serde(rename = "geographicalExtent")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,4 +152,74 @@ pub struct Metadata {
     pub reference_system: Option<ReferenceSystem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every public type in this crate derives `PartialEq` so values can be
+    /// compared directly, not just formatted and eyeballed via `Debug`.
+    /// `Transform`, `Address`, `PointOfContact`, `ReferenceSystem`, and
+    /// `Metadata` were missing it; this pins that they now support `==`.
+    #[test]
+    fn transform_with_equal_fields_is_equal() {
+        let a = Transform::new();
+        let b = Transform::new();
+        assert_eq!(a, b);
+        let mut c = Transform::new();
+        c.translate = vec![1.0, 0.0, 0.0];
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn address_with_equal_fields_is_equal() {
+        let a = Address {
+            thoroughfare_number: 1,
+            thoroughfare_name: "rue de la Patate".to_string(),
+            locality: "Chibougamau".to_string(),
+            postal_code: "H0H 0H0".to_string(),
+            country: "Canada".to_string(),
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn point_of_contact_with_equal_fields_is_equal() {
+        let a = PointOfContact {
+            contact_name: "Jane Doe".to_string(),
+            contact_type: None,
+            role: None,
+            phone: None,
+            email_address: "jane@example.com".to_string(),
+            website: None,
+            address: None,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn reference_system_with_equal_fields_is_equal() {
+        let a = ReferenceSystem::from_url("https://www.opengis.net/def/crs/EPSG/0/7415").unwrap();
+        let b = ReferenceSystem::from_url("https://www.opengis.net/def/crs/EPSG/0/7415").unwrap();
+        assert_eq!(a, b);
+        let c = ReferenceSystem::from_url("https://www.opengis.net/def/crs/EPSG/0/4326").unwrap();
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn metadata_with_equal_fields_is_equal() {
+        let a = Metadata {
+            geographical_extent: Some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+            identifier: None,
+            point_of_contact: None,
+            reference_date: None,
+            reference_system: None,
+            title: Some("dataset".to_string()),
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
 }

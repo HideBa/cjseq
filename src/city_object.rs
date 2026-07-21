@@ -150,7 +150,7 @@ impl CityObjectType {
     pub const WaterBody: CityObjectType = CityObjectType::Known(KnownCityObjectType::WaterBody);
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CityObject {
     #[serde(rename = "type")]
     pub thetype: CityObjectType,
@@ -278,6 +278,19 @@ mod tests {
             "an Extension-typed CityObject with an extra flattened member inside a \
              CityJSONFeature must round-trip byte-for-byte"
         );
+    }
+
+    /// Every public type in this crate derives `PartialEq`; `CityObject` was
+    /// missing it.
+    #[test]
+    fn city_object_with_equal_fields_is_equal() {
+        let input = serde_json::json!({"type": "Building"});
+        let a: CityObject = serde_json::from_value(input.clone()).unwrap();
+        let b: CityObject = serde_json::from_value(input).unwrap();
+        assert_eq!(a, b);
+        let mut c = b.clone();
+        c.children = Some(vec!["id-2".to_string()]);
+        assert_ne!(a, c);
     }
 
     /// `cityobjects.schema.json`'s `_AbstractCityObject.geographicalExtent`

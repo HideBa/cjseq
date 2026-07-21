@@ -15,7 +15,7 @@ pub enum SortingStrategy {
     Hilbert, //-- TODO implement Hilbert sorting
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CityJSON {
     #[serde(rename = "type")]
     pub thetype: CityJSONType,
@@ -463,7 +463,7 @@ impl CityJSON {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CityJSONFeature {
     #[serde(rename = "type")]
     pub thetype: CityJSONFeatureType,
@@ -543,6 +543,34 @@ pub enum CityJSONFeatureType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every public type in this crate derives `PartialEq`; `CityJSON` and
+    /// `CityJSONFeature` were missing it.
+    #[test]
+    fn cityjson_feature_with_equal_fields_is_equal() {
+        let input = serde_json::json!({
+            "type": "CityJSONFeature",
+            "id": "id-1",
+            "CityObjects": {},
+            "vertices": []
+        });
+        let a: CityJSONFeature = serde_json::from_value(input.clone()).unwrap();
+        let b: CityJSONFeature = serde_json::from_value(input).unwrap();
+        assert_eq!(a, b);
+        let mut c = b.clone();
+        c.id = "id-2".to_string();
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn cityjson_with_equal_fields_is_equal() {
+        let a = CityJSON::new();
+        let b = CityJSON::new();
+        assert_eq!(a, b);
+        let mut c = CityJSON::new();
+        c.version = "1.1".to_string();
+        assert_ne!(a, c);
+    }
 
     #[test]
     fn cityjson_type_round_trips() {
