@@ -159,15 +159,52 @@ pub enum SemanticsValues {
 /// it is an `Option` that is serialized even when `None` — writing it out as
 /// `null` rather than dropping the member, which would produce a document the
 /// schema rejects.
+///
+/// As with [`SemanticsSurface`], the `semantics` object in
+/// `geomprimitives.schema.json` names `surfaces` and `values` and declares no
+/// `additionalProperties: false` -- unlike its enclosing geometry object,
+/// which does -- so any further member is legal and is kept verbatim in
+/// `other` rather than dropped.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Semantics {
     pub surfaces: Vec<SemanticsSurface>,
     pub values: Option<SemanticsValues>,
+    #[serde(flatten)]
+    pub other: HashMap<String, Value>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `semantics` object names `surfaces` and `values` and declares no
+    /// `additionalProperties: false` -- unlike the geometry object that
+    /// contains it, which does -- so a further member is legal CityJSON and
+    /// must not vanish. `SemanticsSurface` already kept its extras; the
+    /// enclosing `Semantics` did not.
+    #[test]
+    fn semantics_keeps_members_the_schema_does_not_name() {
+        let input = serde_json::json!({
+            "surfaces": [{"type": "RoofSurface"}],
+            "values": [0],
+            "vendorData": {"x": 1}
+        });
+        let s: Semantics = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(s.other["vendorData"], serde_json::json!({"x": 1}));
+        assert_eq!(serde_json::to_value(&s).unwrap(), input);
+    }
+
+    /// And with nothing extra, nothing extra appears.
+    #[test]
+    fn semantics_without_extras_serializes_unchanged() {
+        let input = serde_json::json!({
+            "surfaces": [{"type": "RoofSurface"}],
+            "values": null
+        });
+        let s: Semantics = serde_json::from_value(input.clone()).unwrap();
+        assert!(s.other.is_empty());
+        assert_eq!(serde_json::to_value(&s).unwrap(), input);
+    }
 
     #[test]
     fn solid_semantics_values_are_one_per_surface_per_shell() {

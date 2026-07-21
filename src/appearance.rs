@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// One shell's worth of material indices, one per surface. `None` — a whole
 /// shell with no material — is `null` in JSON, which
@@ -141,6 +142,11 @@ pub struct MaterialReference {
     pub values: Option<Option<MaterialValues>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<usize>,
+    /// The per-theme material object names `value` and `values` and declares
+    /// no `additionalProperties: false`, so anything further is legal
+    /// CityJSON and is kept rather than dropped.
+    #[serde(flatten)]
+    pub other: HashMap<String, Value>,
 }
 
 /// One theme's texture assignment for a geometry.
@@ -153,6 +159,10 @@ pub struct MaterialReference {
 pub struct TextureReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<TextureValues>,
+    /// As with [`MaterialReference`]: the per-theme texture object declares no
+    /// `additionalProperties: false`, so extra members are legal and kept.
+    #[serde(flatten)]
+    pub other: HashMap<String, Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -234,6 +244,47 @@ impl Appearance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-theme `material` and `texture` objects in
+    /// `geomprimitives.schema.json` name their members and then stop: neither
+    /// declares `additionalProperties: false`, unlike the geometry object
+    /// enclosing them, which does. So an extra member is legal CityJSON, and
+    /// dropping it is silent data loss.
+    #[test]
+    fn a_material_or_texture_theme_keeps_members_the_schema_does_not_name() {
+        let m: MaterialReference =
+            serde_json::from_value(serde_json::json!({"value": 0, "vendorData": true})).unwrap();
+        assert_eq!(m.value, Some(0));
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({"value": 0, "vendorData": true})
+        );
+
+        let t: TextureReference =
+            serde_json::from_value(serde_json::json!({"values": [[[0, 1, 2]]], "note": "x"}))
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            serde_json::json!({"values": [[[0, 1, 2]]], "note": "x"})
+        );
+    }
+
+    /// The catch-all must not disturb what was already pinned: an absent
+    /// member stays absent, and `{"values": null}` stays distinct from `{}`.
+    #[test]
+    fn the_catch_all_does_not_disturb_absent_versus_null() {
+        let empty: MaterialReference = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(empty.other.is_empty());
+        assert_eq!(serde_json::to_value(&empty).unwrap(), serde_json::json!({}));
+
+        let null: MaterialReference =
+            serde_json::from_value(serde_json::json!({"values": null})).unwrap();
+        assert_eq!(null.values, Some(None));
+        assert_eq!(
+            serde_json::to_value(&null).unwrap(),
+            serde_json::json!({"values": null})
+        );
+    }
 
     #[test]
     fn material_indices_serialize_as_numbers_and_null() {
