@@ -1,5 +1,7 @@
 use crate::error::CjseqError;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 
 const DEFAULT_CRS_BASE_URL: &str = "https://www.opengis.net/def/crs";
 
@@ -134,6 +136,21 @@ impl<'de> Deserialize<'de> for ReferenceSystem {
     }
 }
 
+/// The `metadata` member of a [`crate::CityJSON`] object (§ 5 Metadata).
+///
+/// The six members below are the ones the core spec names. They are *not* the
+/// only ones a valid document may carry: `metadata.schema.json`'s `metadata`
+/// object declares those six under `properties` and then stops -- there is no
+/// `additionalProperties: false`, unlike (say) `transform` or
+/// `geometry-templates`, which both do declare it. So any further member is
+/// legal CityJSON, and the spec itself points at the MetadataExtended
+/// Extension as the place to put more.
+///
+/// Hence `other`: without it every such member is silently dropped on the way
+/// through. Real files rely on this -- every 3DBAG dataset carries
+/// `fullMetadataUrl` and `version` in its metadata (see
+/// `tests/data/small.city.jsonl`), and before this field existed both simply
+/// vanished.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Metadata {
     #[serde(rename = "geographicalExtent")]
@@ -152,6 +169,9 @@ pub struct Metadata {
     pub reference_system: Option<ReferenceSystem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Every metadata member the core spec does not name, kept verbatim.
+    #[serde(flatten)]
+    pub other: HashMap<String, Value>,
 }
 
 #[cfg(test)]
@@ -218,8 +238,53 @@ mod tests {
             reference_date: None,
             reference_system: None,
             title: Some("dataset".to_string()),
+            other: HashMap::new(),
         };
         let b = a.clone();
         assert_eq!(a, b);
+    }
+
+    /// `metadata.schema.json`'s `metadata` object lists six properties and
+    /// declares no `additionalProperties: false`, so any further member is
+    /// legal CityJSON. Real 3DBAG files carry `fullMetadataUrl` and
+    /// `version`; before `Metadata.other` existed, both were silently dropped
+    /// on the way through, which `tests/roundtrip.rs` caught on
+    /// `tests/data/small.city.jsonl`.
+    #[test]
+    fn metadata_keeps_members_the_core_spec_does_not_name() {
+        let input = serde_json::json!({
+            "title": "3DBAG",
+            "fullMetadataUrl": "https://data.3dbag.nl/metadata/v20240420/metadata.json"
+        });
+        let m: Metadata = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(m.title.as_deref(), Some("3DBAG"));
+        assert_eq!(
+            m.other.get("fullMetadataUrl").and_then(|v| v.as_str()),
+            Some("https://data.3dbag.nl/metadata/v20240420/metadata.json")
+        );
+        assert_eq!(serde_json::to_value(&m).unwrap(), input);
+    }
+
+    /// A nested extra member (the MetadataExtended Extension puts objects
+    /// here) must survive whole, not be flattened or truncated.
+    #[test]
+    fn a_nested_extra_metadata_member_survives() {
+        let input = serde_json::json!({
+            "+metadata-extended": {"lineage": [{"thematicModels": ["Building"]}]}
+        });
+        let m: Metadata = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&m).unwrap(), input);
+    }
+
+    /// An absent extra member must not reappear as an empty object or a
+    /// `null`: `#[serde(flatten)]` over an empty map writes nothing.
+    #[test]
+    fn an_empty_other_adds_nothing_on_the_way_out() {
+        let m: Metadata = serde_json::from_value(serde_json::json!({"title": "x"})).unwrap();
+        assert!(m.other.is_empty());
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({"title": "x"})
+        );
     }
 }
