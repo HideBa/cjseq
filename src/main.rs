@@ -1,5 +1,9 @@
+use cjseq::error::Result;
 use cjseq::CityJSON;
 use cjseq::CityJSONFeature;
+use cjseq::CityJSONType;
+use cjseq::CityObjectType;
+use cjseq::CjseqError;
 use cjseq::Transform;
 
 extern crate clap;
@@ -7,7 +11,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 
 use rand::Rng;
-use std::fmt;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -66,33 +69,6 @@ enum Commands {
         #[arg(long, value_name = "X", value_parser = clap::value_parser!(u32).range(1..), group = "exclusive")]
         random: Option<u32>,
     },
-}
-
-#[derive(Debug)]
-enum MyError {
-    IoError(std::io::Error),
-    JsonError(serde_json::Error),
-    CityJsonError(String),
-}
-impl fmt::Display for MyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MyError::JsonError(json_error) => write!(f, "Error (JSON): {}", json_error),
-            MyError::IoError(io_error) => write!(f, "Error (io): {}", io_error),
-            MyError::CityJsonError(cjson_error) => write!(f, "Error (CityJSON): {}", cjson_error),
-        }
-    }
-}
-impl std::error::Error for MyError {}
-impl From<serde_json::Error> for MyError {
-    fn from(err: serde_json::Error) -> Self {
-        MyError::JsonError(err)
-    }
-}
-impl From<std::io::Error> for MyError {
-    fn from(err: std::io::Error) -> Self {
-        MyError::IoError(err)
-    }
 }
 
 fn main() {
@@ -178,7 +154,7 @@ fn main() {
     }
 }
 
-fn filter_random(exclude: bool, rand_factor: u32) -> Result<(), MyError> {
+fn filter_random(exclude: bool, rand_factor: u32) -> Result<()> {
     let stdin = std::io::stdin();
     let mut rng = rand::thread_rng();
     for line in stdin.lock().lines() {
@@ -201,7 +177,12 @@ fn filter_random(exclude: bool, rand_factor: u32) -> Result<(), MyError> {
     Ok(())
 }
 
-fn filter_cotype(exclude: bool, cotype: String) -> Result<(), MyError> {
+fn filter_cotype(exclude: bool, cotype: String) -> Result<()> {
+    // The CLI accepts any type name the user types (a core type such as
+    // "Building", or an Extension type such as "+NoiseBuilding"); parse it
+    // through the same enum used for the CityObjects being filtered so the
+    // comparison below is enum-to-enum, not string-to-string.
+    let cotype: CityObjectType = serde_json::from_value(serde_json::Value::String(cotype))?;
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let mut w: bool = false;
@@ -224,7 +205,7 @@ fn filter_cotype(exclude: bool, cotype: String) -> Result<(), MyError> {
     Ok(())
 }
 
-fn filter_bbox(exclude: bool, bbox: &Vec<f64>) -> Result<(), MyError> {
+fn filter_bbox(exclude: bool, bbox: &Vec<f64>) -> Result<()> {
     let stdin = std::io::stdin();
     let mut cj: CityJSON = CityJSON::new();
     for line in stdin.lock().lines() {
@@ -251,7 +232,7 @@ fn filter_bbox(exclude: bool, bbox: &Vec<f64>) -> Result<(), MyError> {
     Ok(())
 }
 
-fn filter_radius(exclude: bool, x: f64, y: f64, r: f64) -> Result<(), MyError> {
+fn filter_radius(exclude: bool, x: f64, y: f64, r: f64) -> Result<()> {
     let stdin = std::io::stdin();
     let mut cj: CityJSON = CityJSON::new();
     for line in stdin.lock().lines() {
@@ -279,7 +260,7 @@ fn filter_radius(exclude: bool, x: f64, y: f64, r: f64) -> Result<(), MyError> {
     Ok(())
 }
 
-fn collect_from_stdin() -> Result<(), MyError> {
+fn collect_from_stdin() -> Result<()> {
     let stdin = std::io::stdin();
     let mut cjj = CityJSON::new();
     let mut cjj_init: bool = false;
@@ -307,7 +288,7 @@ fn collect_from_stdin() -> Result<(), MyError> {
     Ok(())
 }
 
-fn collect_from_files(files: &Vec<String>) -> Result<(), MyError> {
+fn collect_from_files(files: &Vec<String>) -> Result<()> {
     let mut cjj = CityJSON::new();
     let mut cjj_init: bool = false;
     for file in files {
@@ -342,7 +323,7 @@ fn collect_from_files(files: &Vec<String>) -> Result<(), MyError> {
     Ok(())
 }
 
-fn cat_from_stdin(order: cjseq::SortingStrategy) -> Result<(), MyError> {
+fn cat_from_stdin(order: cjseq::SortingStrategy) -> Result<()> {
     let mut input = String::new();
     match std::io::stdin().read_to_string(&mut input) {
         Ok(_) => {
@@ -356,7 +337,7 @@ fn cat_from_stdin(order: cjseq::SortingStrategy) -> Result<(), MyError> {
     Ok(())
 }
 
-fn cat_from_file(file: &PathBuf, order: cjseq::SortingStrategy) -> Result<(), MyError> {
+fn cat_from_file(file: &PathBuf, order: cjseq::SortingStrategy) -> Result<()> {
     let f = File::open(file.canonicalize()?)?;
     let mut br = BufReader::new(f);
     let mut json_content = String::new();
@@ -366,14 +347,14 @@ fn cat_from_file(file: &PathBuf, order: cjseq::SortingStrategy) -> Result<(), My
     Ok(())
 }
 
-fn cat(cjj: &mut CityJSON, order: cjseq::SortingStrategy) -> Result<(), MyError> {
-    if cjj.thetype != "CityJSON" {
-        return Err(MyError::CityJsonError(
+fn cat(cjj: &mut CityJSON, order: cjseq::SortingStrategy) -> Result<()> {
+    if cjj.thetype != CityJSONType::CityJSON {
+        return Err(CjseqError::Validation(
             "Input file not CityJSON.".to_string(),
         ));
     }
     if cjj.version != "1.1" && cjj.version != "2.0" {
-        return Err(MyError::CityJsonError(
+        return Err(CjseqError::Validation(
             "Input file not CityJSON v1.1 nor v2.0.".to_string(),
         ));
     }
@@ -389,4 +370,25 @@ fn cat(cjj: &mut CityJSON, order: cjseq::SortingStrategy) -> Result<(), MyError>
             .write_all(&format!("{}\n", serde_json::to_string(&cjf).unwrap()).as_bytes())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cat()` used to report a bad version with a hand-rolled `MyError`
+    /// local to the binary. It now reuses the library's `CjseqError`, so a
+    /// bad version must come back as `CjseqError::Validation`, not a panic
+    /// or a generic string error.
+    #[test]
+    fn cat_rejects_a_version_the_crate_does_not_support() {
+        let mut cjj = CityJSON::new();
+        cjj.version = "9.9".to_string();
+        let err = cat(&mut cjj, cjseq::SortingStrategy::Random).unwrap_err();
+        assert!(matches!(err, CjseqError::Validation(_)));
+        assert_eq!(
+            err.to_string(),
+            "invalid CityJSON: Input file not CityJSON v1.1 nor v2.0."
+        );
+    }
 }
