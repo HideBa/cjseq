@@ -22,11 +22,11 @@ fn doc(extra: serde_json::Value) -> serde_json::Value {
 
 #[test]
 fn lod_is_one_of_the_schemas_values() {
-    for ok in ["0", "1", "2", "3", "0.0", "1.2", "2.2", "3.3"] {
+    for ok in ["0", "1", "2", "3", "4", "0.0", "1.2", "2.2", "3.3", "4.0"] {
         let l: Lod = serde_json::from_value(json!(ok)).unwrap();
         assert_eq!(serde_json::to_value(l).unwrap(), json!(ok), "{ok}");
     }
-    for bad in ["4", "2.4", "2.", "x", "", "1.2.3", "02"] {
+    for bad in ["5", "4.4", "2.4", "2.", "x", "", "1.2.3", "02"] {
         assert!(
             serde_json::from_value::<Lod>(json!(bad)).is_err(),
             "{bad:?} must be rejected"

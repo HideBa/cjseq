@@ -50,7 +50,9 @@ impl GeometryType {
 
 /// A level of detail (§ 3.2): `"0"` to `"3"`, optionally refined with one more
 /// digit, `"0.0"` to `"3.3"` -- the twenty values `geomprimitives.schema.json`
-/// enumerates. `"2"` and `"2.0"` are distinct values and stay distinct.
+/// enumerates -- and CityGML 2.0's LoD 4, `"4"` and `"4.0"` to `"4.3"`, which
+/// CityGML 3.0 folds into LoD 3 but a CityGML 2.0 source still carries.
+/// `"2"` and `"2.0"` are distinct values and stay distinct.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(try_from = "String", into = "String")]
 pub struct Lod {
@@ -59,16 +61,16 @@ pub struct Lod {
 }
 
 impl Lod {
-    /// `level` and `refinement` must each be 0 to 3.
+    /// `level` must be 0 to 4 and `refinement` 0 to 3.
     pub fn new(level: u8, refinement: Option<u8>) -> Result<Lod> {
-        if level > 3 || refinement.is_some_and(|r| r > 3) {
+        if level > 4 || refinement.is_some_and(|r| r > 3) {
             return Err(CjseqError::Validation(format!(
-                "LoD {level}.{refinement:?} is out of range: both parts are 0 to 3"
+                "LoD {level}.{refinement:?} is out of range: the level is 0 to 4, the refinement 0 to 3"
             )));
         }
         Ok(Lod { level, refinement })
     }
-    /// The LoD level, 0 to 3.
+    /// The LoD level, 0 to 4.
     pub fn level(&self) -> u8 {
         self.level
     }
@@ -90,17 +92,17 @@ impl std::fmt::Display for Lod {
 impl std::str::FromStr for Lod {
     type Err = CjseqError;
     fn from_str(s: &str) -> Result<Lod> {
-        let digit = |c: &str| match c.as_bytes() {
-            [d @ b'0'..=b'3'] => Some(d - b'0'),
+        let digit = |c: &str, max: u8| match c.as_bytes() {
+            [d @ b'0'..=b'9'] if d - b'0' <= max => Some(d - b'0'),
             _ => None,
         };
         let parsed = match s.split_once('.') {
-            None => digit(s).map(|l| (l, None)),
-            Some((l, r)) => digit(l).zip(digit(r)).map(|(l, r)| (l, Some(r))),
+            None => digit(s, 4).map(|l| (l, None)),
+            Some((l, r)) => digit(l, 4).zip(digit(r, 3)).map(|(l, r)| (l, Some(r))),
         };
         let (level, refinement) = parsed.ok_or_else(|| {
             CjseqError::Validation(format!(
-                "{s:?} is not a LoD: expected \"0\" to \"3\" or \"0.0\" to \"3.3\""
+                "{s:?} is not a LoD: expected \"0\" to \"4\" or \"0.0\" to \"4.3\""
             ))
         })?;
         Lod::new(level, refinement)
