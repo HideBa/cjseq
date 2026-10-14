@@ -32,6 +32,15 @@ jobs:
       - name: Publish to NPM
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # A pre-release such as 0.5.0-alpha.1 goes under its own dist-tag
+        # (`alpha`), so `npm install @cityjson/cjseq` keeps giving the latest
+        # release.
         run: |
           cd pkg
-          npm publish --access public
+          version=$(node -p "require('./package.json').version")
+          case "$version" in
+            *-*) tag=${version#*-}; tag=${tag%%.*} ;;
+            *) tag=latest ;;
+          esac
+          echo "publishing $version under dist-tag $tag"
+          npm publish --access public --tag "$tag"
