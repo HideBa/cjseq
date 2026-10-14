@@ -363,6 +363,67 @@ fn a_feature_is_checked_on_its_own() {
     }
 }
 
+/// A CityObjectGroup and a member it references may be separate features,
+/// as citygml-tools writes a CityGML group whose members are `xlink:href`s:
+/// the group's feature names children that live elsewhere, and the member's
+/// feature names the group as a parent.
+#[test]
+fn a_feature_may_link_a_group_and_a_member_in_another_feature() {
+    let f = |v: Value| CityJSONFeature::from_str(&v.to_string()).unwrap();
+    //-- the group, its members elsewhere
+    f(
+        json!({"type": "CityJSONFeature", "id": "g", "CityObjects": {
+        "g": {"type": "CityObjectGroup", "children": ["t", "p"]}}, "vertices": []}),
+    )
+    .validate()
+    .unwrap();
+    //-- a member that is a feature of its own
+    f(
+        json!({"type": "CityJSONFeature", "id": "t", "CityObjects": {
+        "t": {"type": "SolitaryVegetationObject", "parents": ["g"]}}, "vertices": []}),
+    )
+    .validate()
+    .unwrap();
+    //-- a member inside another feature, below its structural parent
+    f(
+        json!({"type": "CityJSONFeature", "id": "b", "CityObjects": {
+        "b": {"type": "Building", "children": ["p"]},
+        "p": {"type": "BuildingPart", "parents": ["b", "g"]}}, "vertices": []}),
+    )
+    .validate()
+    .unwrap();
+    //-- a missing child of anything but a group is still dangling
+    let e = f(
+        json!({"type": "CityJSONFeature", "id": "b", "CityObjects": {
+        "b": {"type": "Building", "children": ["x"]}}, "vertices": []}),
+    )
+    .validate()
+    .unwrap_err();
+    assert!(
+        matches!(e, CjseqError::DanglingReference { ref from, ref to } if from == "b" && to == "x"),
+        "{e:?}"
+    );
+    //-- and so is the only parent of an object that is not the feature's root
+    let e = f(
+        json!({"type": "CityJSONFeature", "id": "b", "CityObjects": {
+        "b": {"type": "Building"},
+        "p": {"type": "BuildingPart", "parents": ["x"]}}, "vertices": []}),
+    )
+    .validate()
+    .unwrap_err();
+    assert!(
+        matches!(e, CjseqError::DanglingReference { ref from, ref to } if from == "p" && to == "x"),
+        "{e:?}"
+    );
+    //-- a document holds every object, so a group's missing member is dangling
+    let e = first_error(&doc(
+        json!({"g": {"type": "CityObjectGroup", "children": ["t"]}}),
+        json!([]),
+        json!({}),
+    ));
+    assert!(matches!(e, CjseqError::DanglingReference { .. }), "{e:?}");
+}
+
 /// Every fixture is valid, and so is everything `collect` and `cat` make
 /// from it.
 #[test]
