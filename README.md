@@ -21,6 +21,12 @@ Its types follow the CityJSON 2.0 schema: a geometry's boundaries and its semant
 cargo add cjseq --no-default-features
 ```
 
+Until 0.5.0 is released, name the pre-release, since Cargo does not pick one on its own:
+
+```sh
+cargo add cjseq@0.5.0-alpha.1 --no-default-features
+```
+
 The default `cli` feature builds the `cjseq` binary and pulls in `clap` and `rand`; the library itself depends only on `serde`, `serde_json` and `indexmap`.
 
 ### Compiling the project

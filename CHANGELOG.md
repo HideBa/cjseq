@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.5.0-alpha.1] - 2026-10-14
+A pre-release of 0.5.0 with everything listed under it, for dependants to build against while the API settles. `cargo add cjseq@0.5.0-alpha.1`; a plain `cargo add cjseq` keeps resolving to 0.4.1 until 0.5.0 is released.
+
 ## [0.5.0] - unreleased
 ### Modified (breaking)
 - The CityJSON schema's structure is carried in the types:
