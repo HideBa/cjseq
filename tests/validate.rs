@@ -415,6 +415,17 @@ fn a_feature_may_link_a_group_and_a_member_in_another_feature() {
         matches!(e, CjseqError::DanglingReference { ref from, ref to } if from == "p" && to == "x"),
         "{e:?}"
     );
+    //-- a 2nd-level City Object never roots a feature: its parent is missing
+    let e = f(
+        json!({"type": "CityJSONFeature", "id": "p", "CityObjects": {
+        "p": {"type": "BuildingPart", "parents": ["b"]}}, "vertices": []}),
+    )
+    .validate()
+    .unwrap_err();
+    assert!(
+        matches!(e, CjseqError::DanglingReference { ref from, ref to } if from == "p" && to == "b"),
+        "{e:?}"
+    );
     //-- a document holds every object, so a group's missing member is dangling
     let e = first_error(&doc(
         json!({"g": {"type": "CityObjectGroup", "children": ["t"]}}),

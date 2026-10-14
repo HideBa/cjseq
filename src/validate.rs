@@ -310,9 +310,10 @@ fn geometry(g: &Geometry, l: &Lengths, errs: &mut Vec<CjseqError>) {
 /// Every child and parent named exists, and names the other back.
 /// `feature` is the feature's id when `cos` is one feature. A
 /// CityObjectGroup and its members may then live in different features: a
-/// group may name children the feature does not hold, and a City Object
-/// may name parents it does not hold when it is the feature's root or has
-/// a parent in the feature, those being its groups.
+/// group may name children the feature does not hold, and a City Object may
+/// name parents the feature does not hold when it is the feature's root and
+/// not a 2nd-level type, or has a parent in the feature. Those parents are
+/// meant to be its groups, which one feature cannot verify.
 fn hierarchy(
     cos: &IndexMap<String, CityObject>,
     feature: Option<&str>,
@@ -324,7 +325,8 @@ fn hierarchy(
     for (id, co) in cos {
         let members_elsewhere = feature.is_some() && co.thetype == CityObjectType::CityObjectGroup;
         let groups_elsewhere = feature.is_some_and(|root| {
-            root == id || co.parents.iter().flatten().any(|p| cos.contains_key(p))
+            (root == id && !second_level(&co.thetype))
+                || co.parents.iter().flatten().any(|p| cos.contains_key(p))
         });
         for child in co.children.iter().flatten() {
             match cos.get(child) {
@@ -361,6 +363,34 @@ fn hierarchy(
             }
         }
     }
+}
+
+/// A 2nd-level City Object type (§ 2): one that is always some 1st-level
+/// City Object's child, so never the root of a feature.
+fn second_level(t: &CityObjectType) -> bool {
+    use crate::KnownCityObjectType as K;
+    matches!(
+        t,
+        CityObjectType::Known(
+            K::BridgePart
+                | K::BridgeInstallation
+                | K::BridgeConstructiveElement
+                | K::BridgeRoom
+                | K::BridgeFurniture
+                | K::BuildingPart
+                | K::BuildingInstallation
+                | K::BuildingConstructiveElement
+                | K::BuildingFurniture
+                | K::BuildingStorey
+                | K::BuildingRoom
+                | K::BuildingUnit
+                | K::TunnelPart
+                | K::TunnelInstallation
+                | K::TunnelConstructiveElement
+                | K::TunnelHollowSpace
+                | K::TunnelFurniture
+        )
+    )
 }
 
 /// § 8.7 rule 3: a core City Object should not have an Extension child.
